@@ -1,6 +1,9 @@
 import arcpy
 import os
 from itertools import takewhile
+from scipy.spatial import Delaunay
+import numpy as np
+import matplotlib.pyplot as plt
 
 def createSubdir(workspace, subdirList):
     for subdir in subdirList:
@@ -45,17 +48,35 @@ def extractPolygons(singleparts):
     with arcpy.da.SearchCursor(singleparts,['OID@','SHAPE@']) as cursor:
         for row in cursor:
             array1=row[1].getPart()
+            polygon=[]
             for vertice in range(row[1].pointCount):
                 pnt=array1.getObject(0).getObject(vertice)
-                polygons.append((row[0],pnt.X,pnt.Y))
-                print row[0],pnt.X,pnt.Y
+                polygon.append([row[0],pnt.X,pnt.Y])
+            polygons.append(polygon)
     return polygons
 
 def createDelaunay(polygons):
-    print "To be continued...."
+    print "continuing..."
+    # Best practice would be to implement the (slightly) modified delaunay triangulation here, instead of using the ready-made ArcMap functionality
+    # Right now I use the Delaunay class from scypa.spatial library. The extra lines are then being tested if the Lines are correctly placed and the wrong ones are deleted. 
     for polygon in polygons:
-        middlePoints=[]
-        
+        print "New Gap Polygon!!!"
+        print "Trying to convert to np.array()"
+        numpyPolygon=np.array(polygon)
+        print numpyPolygon
+        print "\n performing delaunay"
+        delaunayTriangulation=Delaunay(numpyPolygon[:,1:], qhull_options='Qbb Qx Qs QJ Qz Qt Q12')
+        print ("Delaunay simplices: ", delaunayTriangulation.simplices)
+        print ("Delaunay coordinates: ")
+        print numpyPolygon[:,1:]
+        plt.triplot(numpyPolygon[:,1], numpyPolygon[:,2], delaunayTriangulation.simplices)
+        plt.plot(numpyPolygon[:,1], numpyPolygon[:,2], 'o')
+        for vertice in polygon:
+            nr=vertice[0]
+            x=vertice[1]
+            y=vertice[2]
+            print nr,x,y
+    plt.show()
         
 
 # MAIN
