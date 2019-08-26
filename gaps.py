@@ -69,8 +69,8 @@ def isBetweenAngles(compareAngle, startStopAngles):
     # if any angles are negative, add 360 to them!
     for angle in angles:
         if angle < 0:
-            angle += 2*math.pi
-    if angles[0]<angles[2]:
+            angle +=2*math.pi
+    if angles[0] < angles[2]:
         answer= True
     return answer
 
@@ -85,9 +85,9 @@ def getAllowedAngleSpan(points):
     point2= points[1]
     point3= points[2]
     angle1= getAngle([point1,point2])
-    print "Angle1: ", math.degrees(angle1)
+    #print "Angle1: ", math.degrees(angle1)
     angle2= getAngle([point1,point3])
-    print "Angle2: ",math.degrees(angle2)
+    #print "Angle2: ",math.degrees(angle2)
     return [angle1,angle2]
 
 
@@ -98,52 +98,59 @@ def createDelaunay(output_fc, polygons):
     for polygon in polygons:
         allowedAnglesFromPoint=[]
         print "New Gap Polygon!!!"
-        print "Trying to convert to np.array()"
         numpyPolygon=np.array(polygon)
         print numpyPolygon
-        print "\n performing delaunay"
         delaunayTriangulation=Delaunay(numpyPolygon[:,1:], qhull_options='QbB Qx Qs Qz Qt Q12')
         print ("Delaunay simplices: ", delaunayTriangulation.simplices)
-        # Plotting just for visualization
-        plt.triplot(numpyPolygon[:,1], numpyPolygon[:,2], delaunayTriangulation.simplices)
-        for i in range(len(polygon)-1):
-            plt.text(polygon[i][1], polygon[i][2], i, va="top", family="monospace")
-        plt.plot(numpyPolygon[:-1,1], numpyPolygon[:-1,2], 'o')
-        print ("Numpy size: ", numpyPolygon.shape[0])
+            
+        allowedAngleSpan=[]
         for i in range(numpyPolygon.shape[0]-1):
             print "Point ", i
             if i==0:
                 point1=numpyPolygon[0,1:]
                 point2=numpyPolygon[-2,1:]
                 point3=numpyPolygon[1,1:]
+                print ("First Points: "+ str(numpyPolygon[0,0])+ " and "+ str(numpyPolygon[-2,0])+ " and "+ str(numpyPolygon[1,0]))
                 points=[point1,point2,point3]
                 print "First point"
-                getAllowedAngleSpan(points)
+                allowedAngleSpan.append(getAllowedAngleSpan(points))
             elif i==numpyPolygon.shape[0]-2:
                 point1=numpyPolygon[i,1:]
                 point2=numpyPolygon[i-1,1:]
                 point3=numpyPolygon[0,1:]
                 points=[point1,point2,point3]
                 print "last point"
-                getAllowedAngleSpan(points)
+                allowedAngleSpan.append(getAllowedAngleSpan(points))
             else:
                 point1=numpyPolygon[i,1:]
                 point2=numpyPolygon[i-1,1:]
                 point3=numpyPolygon[i+1,1:]
                 points=[point1,point2,point3]
                 print "normal point"
-                getAllowedAngleSpan(points)
-            
-        
-        #for simplice in delaunayTriangulation.simplices:
-        #    point1=numpyPolygon[simplice[0],1:]
-        #    point2=numpyPolygon[simplice[1],1:]
-        #    point3=numpyPolygon[simplice[2],1:]
-        #    points=[point1,point2,point3]
-        #    getAllowedAngleSpan(points)
-            
+                allowedAngleSpan.append(getAllowedAngleSpan(points))
+        print allowedAngleSpan        
+        # checking if delaunay points are ok
+        newSimpliceArray=[]
+        for simplice in delaunayTriangulation.simplices:
+            point1=numpyPolygon[simplice[0],1:]
+            point2=numpyPolygon[simplice[1],1:]
+            point3=numpyPolygon[simplice[2],1:]
+            compareTo=allowedAngleSpan[simplice[0]]
+            points= [point1,point2,point3]
+            angle= getAngle(points)
+            print ("Simplice:" + str(simplice) +" Angle: "+ str(math.degrees(angle))+ "  Must be between "+ str(math.degrees(compareTo[0]))+ "  and "+ str(math.degrees(compareTo[1])))
+            print "Is between angles? ----> ", str(isBetweenAngles(angle,compareTo))
+            if isBetweenAngles(angle,compareTo):
+                newSimpliceArray.append(simplice)
+        delaunayTriangulation.simplices=np.array(newSimpliceArray)
+        print delaunayTriangulation.simplices
         #add to Triangulation shapefile! 
-
+        # Plotting just for visualization
+        plt.triplot(numpyPolygon[:,1], numpyPolygon[:,2], delaunayTriangulation.simplices)
+        for i in range(len(polygon)-1):
+            plt.text(polygon[i][1], polygon[i][2], i, va="top", family="monospace")
+            
+        plt.plot(numpyPolygon[:-1,1], numpyPolygon[:-1,2], 'o')
     plt.show()
         
 
