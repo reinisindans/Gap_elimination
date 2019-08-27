@@ -23,3 +23,17 @@ Temp/singleparts.shp
 Temp/singleparts.shp.xml
 Temp/singleparts.shx
 Temp/dissolved.dbf
+Temp/triangles.shx
+Temp/triangles.shp.xml
+Temp/triangles.shp
+Temp/triangles.prj
+Temp/triangles.dbf
+Temp/triangles.cpg
+Temp/cutDelaunay.shx
+Temp/cutDelaunay.shp.xml
+Temp/cutDelaunay.shp
+Temp/cutDelaunay.sbx
+Temp/cutDelaunay.sbn
+Temp/cutDelaunay.prj
+Temp/cutDelaunay.dbf
+Temp/cutDelaunay.cpg

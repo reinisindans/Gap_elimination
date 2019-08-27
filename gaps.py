@@ -90,8 +90,18 @@ def getAllowedAngleSpan(points):
     #print "Angle2: ",math.degrees(angle2)
     return [angle1,angle2]
 
+def getMiddlePoint(points):
+    point1_X= points[0][0]
+    point1_Y= points[0][1]
+    point2_X= points[1][0]
+    point2_Y= points[1][1]
+    middlePoint_X= (point1_X+point2_X)/2
+    middlePoint_Y= (point2_Y+point2_Y)/2
+    middlePoint=[middlePoint_X, middlePoint_Y]
+    return middlePoint
 
 def createDelaunay(output_fc, polygons):
+    SRS= arcpy.Describe(output_fc).spatialReference
     print "continuing..."
     # Best practice would be to implement the (slightly) modified delaunay triangulation here, instead of using the ready-made ArcMap functionality
     # Right now I use the Delaunay class from scipy.spatial library. The extra lines are then being tested if the Lines are correctly placed and the wrong ones are deleted. 
@@ -102,11 +112,11 @@ def createDelaunay(output_fc, polygons):
         print numpyPolygon
         delaunayTriangulation=Delaunay(numpyPolygon[:,1:], qhull_options='QbB Qx Qs Qz Qt Q12')
         print ("Delaunay simplices: ", delaunayTriangulation.simplices)
-            
+        '''
         allowedAngleSpan=[]
         for i in range(numpyPolygon.shape[0]-1):
             print "Point ", i
-            if i==0:
+            if i==0: # First Point
                 point1=numpyPolygon[0,1:]
                 point2=numpyPolygon[-2,1:]
                 point3=numpyPolygon[1,1:]
@@ -114,42 +124,54 @@ def createDelaunay(output_fc, polygons):
                 points=[point1,point2,point3]
                 print "First point"
                 allowedAngleSpan.append(getAllowedAngleSpan(points))
-            elif i==numpyPolygon.shape[0]-2:
+            elif i==numpyPolygon.shape[0]-2: # Last point
                 point1=numpyPolygon[i,1:]
                 point2=numpyPolygon[i-1,1:]
                 point3=numpyPolygon[0,1:]
                 points=[point1,point2,point3]
                 print "last point"
                 allowedAngleSpan.append(getAllowedAngleSpan(points))
-            else:
+            else: # "Normal" points
                 point1=numpyPolygon[i,1:]
                 point2=numpyPolygon[i-1,1:]
                 point3=numpyPolygon[i+1,1:]
                 points=[point1,point2,point3]
                 print "normal point"
                 allowedAngleSpan.append(getAllowedAngleSpan(points))
-        print allowedAngleSpan        
+        print allowedAngleSpan
+    
         # checking if delaunay points are ok
         newSimpliceArray=[]
         for simplice in delaunayTriangulation.simplices:
-            point1=numpyPolygon[simplice[0],1:]
-            point2=numpyPolygon[simplice[1],1:]
-            point3=numpyPolygon[simplice[2],1:]
             compareTo=allowedAngleSpan[simplice[0]]
-            points= [point1,point2,point3]
+            point1=numpyPolygon[simplice[0],1:]
+            point2=getMiddlePoint([numpyPolygon[simplice[1],1:],numpyPolygon[simplice[2],1:]])
+            points= [point1,point2]
             angle= getAngle(points)
             print ("Simplice:" + str(simplice) +" Angle: "+ str(math.degrees(angle))+ "  Must be between "+ str(math.degrees(compareTo[0]))+ "  and "+ str(math.degrees(compareTo[1])))
             print "Is between angles? ----> ", str(isBetweenAngles(angle,compareTo))
             if isBetweenAngles(angle,compareTo):
                 newSimpliceArray.append(simplice)
         delaunayTriangulation.simplices=np.array(newSimpliceArray)
+        '''
+        
         print delaunayTriangulation.simplices
-        #add to Triangulation shapefile! 
+        #add to Triangulation shapefile!
+        with arcpy.da.InsertCursor(output_fc,['PolyNo','SHAPE@']) as cursor:
+            for polygon in delaunayTriangulation.simplices:
+                points=[]
+                for point in polygon:
+                    print numpyPolygon[point,1:]
+                    point= arcpy.Point(numpyPolygon[point,1],numpyPolygon[point,2])
+                    points.append(point)
+                array=arcpy.Array(points)
+                polygon= arcpy.Polygon(array, SRS)
+                cursor.insertRow([numpyPolygon[0,0],polygon])
+        
         # Plotting just for visualization
         plt.triplot(numpyPolygon[:,1], numpyPolygon[:,2], delaunayTriangulation.simplices)
         for i in range(len(polygon)-1):
             plt.text(polygon[i][1], polygon[i][2], i, va="top", family="monospace")
-            
         plt.plot(numpyPolygon[:-1,1], numpyPolygon[:-1,2], 'o')
     plt.show()
         
@@ -163,10 +185,13 @@ output_folder= "Output"
 output_path= workspace+"/"+output_folder
 createSubdir(workspace, [temp_folder, output_folder])
 input_shapefile=searchSHP(workspace)
+SRS= arcpy.Describe(input_shapefile).spatialReference
 dissolved=temp_path+"/dissolved.shp"
 holes=temp_path+"/holes.shp"
 singleparts=temp_path+"/singleparts.shp"
-triangles=temp_path+"/triangles.shp"
+triangles="triangles.shp"
+triangles_path= temp_path+"/"+triangles
+cutDelaunay_path=temp_path+"/cutDelaunay.shp"
 
 # Find gaps in polygon layer 1) union 2) fill Gaps 3) Difference
 
@@ -181,8 +206,15 @@ arcpy.MultipartToSinglepart_management (holes, singleparts)
 # Delaunay lines 2) create triangle-Polygons using the Vertices of Polygon and
 # Delaunay line middle points
 polygons=extractPolygons(singleparts)
-createDelaunay(triangles, polygons)
+# creating the triangle shapefile
+
+arcpy.CreateFeatureclass_management(temp_path, triangles, "POLYGON","" , "DISABLED", "DISABLED", SRS)
+arcpy.AddField_management(in_table=triangles_path, field_name="PolyNo", field_type='LONG', field_length=10)
+
+createDelaunay(triangles_path, polygons)
+#cut delauney with original holes to remove extras
+arcpy.Clip_analysis(triangles_path, holes, cutDelaunay_path)
+#
 
 
-
-shutil.rmtree(temp_path)
+#shutil.rmtree(temp_path)
