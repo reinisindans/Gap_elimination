@@ -50,6 +50,7 @@ def extractPolygons(singleparts):
     with arcpy.da.SearchCursor(singleparts,['OID@','SHAPE@']) as cursor:
         for row in cursor:
             array1=row[1].getPart()
+            print ("Length of the polygon Array: "+ str(len(array1)))
             polygon=[]
             for vertice in range(row[1].pointCount):
                 pnt=array1.getObject(0).getObject(vertice)
@@ -57,38 +58,27 @@ def extractPolygons(singleparts):
             polygons.append(polygon)
     return polygons
 
-def isBetweenAngles(compareAngle, startStopAngles):
-    answer = False 
-    angle1= startStopAngles[0]
-    angle2= startStopAngles[1]
-    #Subtract start angle from all angles
-    compareAngle -= angle1
-    angle2 -= angle1
-    angle1 -= angle1
-    angles=[compareAngle, angle1, angle2]
-    # if any angles are negative, add 360 to them!
-    for angle in angles:
-        if angle < 0:
-            angle +=2*math.pi
-    if angles[0] < angles[2]:
-        answer= True
-    return answer
+def extractAllPoints(polygons, precision):
+    # write new Geometries to dictionary -> dictionary provides efficient iteration while searching for geometries 
+    point_dict={}
+    for polygon in polygons:
+        pointNr=0
+        for point in polygon:
+            # create a tuple from coordinates to use as key Schema: {geom=[OID, pntNr]}
+            # Should be done more efficiently, in future implementation must be refactored
+            # to get rid of this type change- and define the coordinates as tuple in the first case!
+            geom=(round(point[1], precision),round(point[2],precision))
+            
+            point_dict[geom]= [point[0],pointNr]
+            pointNr+= 1
+    return point_dict
 
-def getAngle(points):
-    point1= points[0]
-    point2= points[1]
-    angle= math.atan2(point2[1]-point1[1],point2[0]- point1[0])
-    return angle
-    
-def getAllowedAngleSpan(points):
-    point1= points[0]
-    point2= points[1]
-    point3= points[2]
-    angle1= getAngle([point1,point2])
-    #print "Angle1: ", math.degrees(angle1)
-    angle2= getAngle([point1,point3])
-    #print "Angle2: ",math.degrees(angle2)
-    return [angle1,angle2]
+def comparePoints(point_dict, comparePoint):
+    # !! comparePoint must be a coordinate tuple !! (X,Y)
+    result= []
+    if comparePoint in point_dict:
+        result= point_dict[comparePoint]
+    return result
 
 def getMiddlePoint(points):
     point1_X= points[0][0]
@@ -100,61 +90,56 @@ def getMiddlePoint(points):
     middlePoint=[middlePoint_X, middlePoint_Y]
     return middlePoint
 
-def createDelaunay(output_fc, polygons):
-    SRS= arcpy.Describe(output_fc).spatialReference
-    print "continuing..."
+def cut_geometry(to_cut, cutter):
+    """
+    Method copied from: https://gis.stackexchange.com/questions/124198/optimizing-arcpy-code-to-cut-polygon?noredirect=1&lq=1
+    Author: Tristan Forward
+    Cut a feature by a line, splitting it into its separate geometries.
+    :param to_cut: The feature to cut.
+    :param cutter: The polylines to cut the feature by.
+    :return: The feature with the split geometry added to it.
+    """
+    arcpy.AddField_management(to_cut, "SOURCE_OID", "LONG")
+    geometries = []
+    polygon = None
+
+    edit = arcpy.da.Editor(os.path.dirname(to_cut))
+    edit.startEditing(False, False)
+
+    insert_cursor = arcpy.da.InsertCursor(to_cut, ["SHAPE@", "SOURCE_OID"])
+
+    with arcpy.da.SearchCursor(cutter, "SHAPE@") as lines:
+        for line in lines:
+            with arcpy.da.UpdateCursor(to_cut, ["SHAPE@", "OID@", "SOURCE_OID"]) as polygons:
+                for polygon in polygons:
+                    if line[0].disjoint(polygon[0]) == False:
+                        if polygon[2] == None:
+                            id = polygon[1]
+                        # Remove previous geom if additional cuts are needed for intersecting lines
+                        if len(geometries) > 1:
+                            del geometries[0] 
+                        geometries.append([polygon[0].cut(line[0]), id])
+                        polygons.deleteRow()
+                for geometryList in geometries:
+                    for geometry in geometryList[0]:
+                        if geometry.area > 0:
+                            insert_cursor.insertRow([geometry, geometryList[1]])
+
+    edit.stopEditing(True)
+
+def createDelaunay(temp_path,triangles, polygons, SRS):
+    # Creating the new Delaunay .shp
+    output_fc= temp_path+"/"+triangles
+    arcpy.CreateFeatureclass_management(temp_path, triangles, "POLYGON","" , "DISABLED", "DISABLED", SRS)
+    arcpy.AddField_management(in_table=triangles_path, field_name="PolyNo", field_type='LONG', field_length=10)
+
     # Best practice would be to implement the (slightly) modified delaunay triangulation here, instead of using the ready-made ArcMap functionality
     # Right now I use the Delaunay class from scipy.spatial library. The extra lines are then being tested if the Lines are correctly placed and the wrong ones are deleted. 
     for polygon in polygons:
-        allowedAnglesFromPoint=[]
-        print "New Gap Polygon!!!"
         numpyPolygon=np.array(polygon)
         print numpyPolygon
         delaunayTriangulation=Delaunay(numpyPolygon[:,1:], qhull_options='QbB Qx Qs Qz Qt Q12')
         print ("Delaunay simplices: ", delaunayTriangulation.simplices)
-        '''
-        allowedAngleSpan=[]
-        for i in range(numpyPolygon.shape[0]-1):
-            print "Point ", i
-            if i==0: # First Point
-                point1=numpyPolygon[0,1:]
-                point2=numpyPolygon[-2,1:]
-                point3=numpyPolygon[1,1:]
-                print ("First Points: "+ str(numpyPolygon[0,0])+ " and "+ str(numpyPolygon[-2,0])+ " and "+ str(numpyPolygon[1,0]))
-                points=[point1,point2,point3]
-                print "First point"
-                allowedAngleSpan.append(getAllowedAngleSpan(points))
-            elif i==numpyPolygon.shape[0]-2: # Last point
-                point1=numpyPolygon[i,1:]
-                point2=numpyPolygon[i-1,1:]
-                point3=numpyPolygon[0,1:]
-                points=[point1,point2,point3]
-                print "last point"
-                allowedAngleSpan.append(getAllowedAngleSpan(points))
-            else: # "Normal" points
-                point1=numpyPolygon[i,1:]
-                point2=numpyPolygon[i-1,1:]
-                point3=numpyPolygon[i+1,1:]
-                points=[point1,point2,point3]
-                print "normal point"
-                allowedAngleSpan.append(getAllowedAngleSpan(points))
-        print allowedAngleSpan
-    
-        # checking if delaunay points are ok
-        newSimpliceArray=[]
-        for simplice in delaunayTriangulation.simplices:
-            compareTo=allowedAngleSpan[simplice[0]]
-            point1=numpyPolygon[simplice[0],1:]
-            point2=getMiddlePoint([numpyPolygon[simplice[1],1:],numpyPolygon[simplice[2],1:]])
-            points= [point1,point2]
-            angle= getAngle(points)
-            print ("Simplice:" + str(simplice) +" Angle: "+ str(math.degrees(angle))+ "  Must be between "+ str(math.degrees(compareTo[0]))+ "  and "+ str(math.degrees(compareTo[1])))
-            print "Is between angles? ----> ", str(isBetweenAngles(angle,compareTo))
-            if isBetweenAngles(angle,compareTo):
-                newSimpliceArray.append(simplice)
-        delaunayTriangulation.simplices=np.array(newSimpliceArray)
-        '''
-        
         print delaunayTriangulation.simplices
         #add to Triangulation shapefile!
         with arcpy.da.InsertCursor(output_fc,['PolyNo','SHAPE@']) as cursor:
@@ -174,7 +159,33 @@ def createDelaunay(output_fc, polygons):
             plt.text(polygon[i][1], polygon[i][2], i, va="top", family="monospace")
         plt.plot(numpyPolygon[:-1,1], numpyPolygon[:-1,2], 'o')
     plt.show()
-        
+
+def determineTriangleType(cutDelaunay_path, polygons, triangleType, precision):
+    arcpy.AddField_management(cutDelaunay_path, triangleType, "SHORT")
+    allPoints=extractAllPoints(polygons, precision)
+    print allPoints
+    with arcpy.da.UpdateCursor(cutDelaunay_path, ["SHAPE@", triangleType]) as cursor:
+        triangleNr=0
+        for row in cursor:
+            # triangle type keys.   0 - triangle is equal with original gap polygon
+            #                       1 - triangle shares 2 sides with original gap poly, 1 extra point needed, plus the middle vertice
+            #                       2 - tri shares 1 side w/ gap polygon, 2 extra points needed as middlepoints
+            #                       3 - tri shares no sides w/ gap polygon, 3 middlepoints + centroid needed! 
+            triangleType=3
+            trianglePoints=[]
+            array=row[0].getPart()
+            for vertice in range(row[0].pointCount):
+                pnt=array.getObject(0).getObject(vertice)
+                geometry=(round(pnt.X,precision),round(pnt.Y,precision))
+                print geometry
+                result= comparePoints(allPoints, geometry)
+                if result!=[]:
+                    trianglePoints.append(result)
+            print ("Triangle No: "+ str(triangleNr))
+            triangleNr+=1
+            print trianglePoints
+            
+    
 
 # MAIN
 arcpy.env.overwriteOutput = True
@@ -192,6 +203,8 @@ singleparts=temp_path+"/singleparts.shp"
 triangles="triangles.shp"
 triangles_path= temp_path+"/"+triangles
 cutDelaunay_path=temp_path+"/cutDelaunay.shp"
+triangleType="tri_type"
+precision=4
 
 # Find gaps in polygon layer 1) union 2) fill Gaps 3) Difference
 
@@ -208,13 +221,17 @@ arcpy.MultipartToSinglepart_management (holes, singleparts)
 polygons=extractPolygons(singleparts)
 # creating the triangle shapefile
 
-arcpy.CreateFeatureclass_management(temp_path, triangles, "POLYGON","" , "DISABLED", "DISABLED", SRS)
-arcpy.AddField_management(in_table=triangles_path, field_name="PolyNo", field_type='LONG', field_length=10)
-
-createDelaunay(triangles_path, polygons)
+createDelaunay(temp_path,triangles, polygons, SRS)
 #cut delauney with original holes to remove extras
 arcpy.Clip_analysis(triangles_path, holes, cutDelaunay_path)
 #
 
+determineTriangleType(cutDelaunay_path,polygons , triangleType, precision)
+
+
+
+
+# Cut each Delaunay Polygon with the polygon centerlines
+# cut_geometry(cutDelaunay_path, polygonCenterlines)
 
 #shutil.rmtree(temp_path)
