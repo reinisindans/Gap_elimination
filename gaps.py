@@ -50,11 +50,13 @@ def extractPolygons(singleparts):
     with arcpy.da.SearchCursor(singleparts,['OID@','SHAPE@']) as cursor:
         for row in cursor:
             array1=row[1].getPart()
-            print ("Length of the polygon Array: "+ str(len(array1)))
             polygon=[]
+            verticeCount=0
             for vertice in range(row[1].pointCount):
                 pnt=array1.getObject(0).getObject(vertice)
                 polygon.append([row[0],pnt.X,pnt.Y])
+                verticeCount+=1
+            print ("Polygon: " + str(row[0]) + " Punkte: "+ str(verticeCount))
             polygons.append(polygon)
     return polygons
 
@@ -68,7 +70,6 @@ def extractAllPoints(polygons, precision):
             # Should be done more efficiently, in future implementation must be refactored
             # to get rid of this type change- and define the coordinates as tuple in the first case!
             geom=(round(point[1], precision),round(point[2],precision))
-            
             point_dict[geom]= [point[0],pointNr]
             pointNr+= 1
     return point_dict
@@ -137,10 +138,14 @@ def createDelaunay(temp_path,triangles, polygons, SRS):
     # Right now I use the Delaunay class from scipy.spatial library. The extra lines are then being tested if the Lines are correctly placed and the wrong ones are deleted. 
     for polygon in polygons:
         numpyPolygon=np.array(polygon)
-        print numpyPolygon
+        #print numpyPolygon
         delaunayTriangulation=Delaunay(numpyPolygon[:,1:], qhull_options='QbB Qx Qs Qz Qt Q12')
-        print ("Delaunay simplices: ", delaunayTriangulation.simplices)
-        print delaunayTriangulation.simplices
+        # Plotting just for visualization
+        plt.triplot(numpyPolygon[:,1], numpyPolygon[:,2], delaunayTriangulation.simplices)
+        plt.plot(numpyPolygon[:-1,1], numpyPolygon[:-1,2], 'o')
+        
+        #print ("Delaunay simplices: ", delaunayTriangulation.simplices)
+        #print delaunayTriangulation.simplices
         #add to Triangulation shapefile!
         with arcpy.da.InsertCursor(output_fc,['PolyNo','SHAPE@']) as cursor:
             for polygon in delaunayTriangulation.simplices:
@@ -152,13 +157,12 @@ def createDelaunay(temp_path,triangles, polygons, SRS):
                 array=arcpy.Array(points)
                 polygon= arcpy.Polygon(array, SRS)
                 cursor.insertRow([numpyPolygon[0,0],polygon])
-        
-        # Plotting just for visualization
-        plt.triplot(numpyPolygon[:,1], numpyPolygon[:,2], delaunayTriangulation.simplices)
-        for i in range(len(polygon)-1):
-            plt.text(polygon[i][1], polygon[i][2], i, va="top", family="monospace")
-        plt.plot(numpyPolygon[:-1,1], numpyPolygon[:-1,2], 'o')
-    plt.show()
+                for i in range(len(points)-1):
+                    plt.text(points[i].X, points[i].Y, i, va="top", family="monospace")
+
+        print ("length oif polygon: "+ str(len(polygon)))
+
+
 
 def determineTriangleType(cutDelaunay_path, polygons, triangleType, precision):
     arcpy.AddField_management(cutDelaunay_path, triangleType, "SHORT")
@@ -229,7 +233,7 @@ arcpy.Clip_analysis(triangles_path, holes, cutDelaunay_path)
 determineTriangleType(cutDelaunay_path,polygons , triangleType, precision)
 
 
-
+plt.show()
 
 # Cut each Delaunay Polygon with the polygon centerlines
 # cut_geometry(cutDelaunay_path, polygonCenterlines)
