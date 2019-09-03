@@ -174,21 +174,34 @@ def createDelaunay(temp_path,triangles, polygons, SRS):
 
 def mergeFeatures(problem_points, featureClass):
     for problem_point in problem_points:
-        geometries=[]
+        rows_to_merge=[]
         
         fields= arcpy.ListFields(featureClass)
+        field_names=[]
+        desc = arcpy.Describe(featureClass)
+        geometry_field_name=desc.areaFieldName
         for field in fields:
             print("{0} is a type of {1} with a length of {2}".format(field.name, field.type, field.length))
-            
+            field_names.append(field.name)
+        geometry_index= field_names.index(geometry_field_name)
+        print ("Found geometry in list of fields, index: "+ str(geometry_index))
         for OID in problem_points[problem_point]:
             sql="FID=%s" % (OID)
             print sql
-            with arcpy.da.SearchCursor(featureClass,['OID@','SHAPE@'],sql) as cursor:
+            with arcpy.da.UpdateCursor(featureClass,field_names,sql) as cursor:
                 for row in cursor: # But should be only one row anyway...
                     print row[0]
                     print ("Geometry appended to merge list: "+ str(OID))
-                    #geometries.append(geometry)
+                    geometries.append(row)
+                    cursor.deleteRow(row)
+                    
+        if len(rows_to_merge)>2:
+            print "Too many polygons in problem point geometries!"
+        else:
+            print ("Lenght of problem geometries!: "+str(len(rows_to_merge)))
+            
         #Merge Geometries!
+            
 
 def determineTriangleType(cutDelaunay_path, polygons, triangleType, precision):
     arcpy.AddField_management(cutDelaunay_path, triangleType, "SHORT")
@@ -196,9 +209,8 @@ def determineTriangleType(cutDelaunay_path, polygons, triangleType, precision):
     isDoneFlag= False
     triangles=[]
     # Todo---> add while !isDoneFlag:  loop!
-    while (isDoneFlag==False):
-        triangles=[]
-        with arcpy.da.UpdateCursor(cutDelaunay_path, ["SHAPE@", triangleType, "OID@"]) as cursor:
+    with arcpy.da.UpdateCursor(cutDelaunay_path, ["SHAPE@", triangleType, "OID@"]) as cursor:
+        while (isDoneFlag==False):
             problem_points={}     # points whose vertices do not coincide with gap polygon vertices. result of arcpy.Clip operation
             triangleNr=0        
             for row in cursor:
@@ -222,7 +234,7 @@ def determineTriangleType(cutDelaunay_path, polygons, triangleType, precision):
                             print ("Problempoint 2 appended: "+str(cursor[2])+ " to : "+ str(problem_points[geometry]))
                             problem_set= problem_points[geometry]
                             problem_set.add(cursor[2])
-                            problem_points[geometry]= problem_set
+                            problem_points[geometry]= problem_set # format: key: coordinates, value: IDs of Triangles
                             print problem_points[geometry]
                         else:
                             print ("problempoint 1 appended!"+ str(cursor[2]))
@@ -233,15 +245,12 @@ def determineTriangleType(cutDelaunay_path, polygons, triangleType, precision):
                 triangles.append((triangleNr, trianglePoints[0], trianglePoints[1]))
             # done with vertice search!
             if problem_points != {}:
-                done= False
-                while (done==False):
-                    mergeFeatures(problem_points, cutDelaunay_path)
-                    done= True
-                # merge the corresponding features
+                mergeFeatures(problem_points, cutDelaunay_path)
+                cursor.reset()
             else:
                 isDoneFlag= True
-        print triangles
-        isDoneFlag= True # remove after degug, added to avoid loop!
+        ##print triangles
+        #isDoneFlag= True # remove after debug, added to avoid loop!
             
     
 
@@ -278,7 +287,6 @@ polygons=extractPolygons(singleparts)
 createDelaunay(temp_path,triangles, polygons, SRS)
 #cut delauney with original holes to remove extras
 arcpy.Clip_analysis(triangles_path, holes, cutDelaunay_path)
-#
 
 determineTriangleType(cutDelaunay_path,polygons , triangleType, precision)
 
