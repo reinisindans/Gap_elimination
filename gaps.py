@@ -140,9 +140,11 @@ def createDelaunay(temp_path,triangles, polygons, SRS):
     output_fc= temp_path+"/"+triangles
     arcpy.CreateFeatureclass_management(temp_path, triangles, "POLYGON","" , "DISABLED", "DISABLED", SRS)
     arcpy.AddField_management(in_table=triangles_path, field_name="PolyNo", field_type='LONG', field_length=10)
+    arcpy.AddField_management(in_table=triangles_path, field_name="UID", field_type='LONG', field_length=10)
 
     # Best practice would be to implement the (slightly) modified delaunay triangulation here, instead of using the ready-made ArcMap functionality
     # Right now I use the Delaunay class from scipy.spatial library. The extra lines are then being tested if the Lines are correctly placed and the wrong ones are deleted. 
+    uid=0
     for polygon in polygons:
         numpyPolygon=np.array(polygon)
         #print numpyPolygon
@@ -154,7 +156,7 @@ def createDelaunay(temp_path,triangles, polygons, SRS):
         
         plt.figure(2)
         
-        with arcpy.da.InsertCursor(output_fc,['PolyNo','SHAPE@']) as cursor:
+        with arcpy.da.InsertCursor(output_fc,['UID','PolyNo','SHAPE@']) as cursor:
             for polygon in delaunayTriangulation.simplices:
                 points=[]
                 for point in polygon:
@@ -163,7 +165,8 @@ def createDelaunay(temp_path,triangles, polygons, SRS):
                     points.append(point)
                 array=arcpy.Array(points)
                 polygon= arcpy.Polygon(array, SRS)
-                cursor.insertRow([numpyPolygon[0,0],polygon])
+                cursor.insertRow([uid, numpyPolygon[0,0], polygon])
+                uid+=1
                 
             # Plotting just for visualization
             
@@ -172,44 +175,48 @@ def createDelaunay(temp_path,triangles, polygons, SRS):
             for i in range(len(numpyPolygon)-1):
                 plt.text(numpyPolygon[i][1], numpyPolygon[i][2], i, va="top", family="monospace")
 
-def mergeFeatures(problem_points, featureClass):
+def mergeFeatures(problem_points, featureClass, UID_field):
     for problem_point in problem_points:
         rows_to_merge=[]
         
         fields= arcpy.ListFields(featureClass)
         field_names=[]
-        desc = arcpy.Describe(featureClass)
-        geometry_field_name=desc.areaFieldName
+        desc=arcpy.Describe(featureClass)
+        geometry_field_name=desc.ShapeFieldName
         for field in fields:
             print("{0} is a type of {1} with a length of {2}".format(field.name, field.type, field.length))
             field_names.append(field.name)
         geometry_index= field_names.index(geometry_field_name)
         print ("Found geometry in list of fields, index: "+ str(geometry_index))
-        for OID in problem_points[problem_point]:
-            sql="FID=%s" % (OID)
+        for UID in problem_points[problem_point]:
+            sql=UID_field+"=%s" % (UID)
             print sql
             with arcpy.da.UpdateCursor(featureClass,field_names,sql) as cursor:
                 for row in cursor: # But should be only one row anyway...
                     print row[0]
-                    print ("Geometry appended to merge list: "+ str(OID))
-                    geometries.append(row)
-                    cursor.deleteRow(row)
+                    print ("Geometry appended to merge list: "+ str(UID))
+                    rows_to_merge.append(row)
+                    cursor.deleteRow()
+                    # todo continui here- get a working algorithm that deletes the unneeded triangles, and merges them to good ones
+                    # then reformat in separate functions
                     
         if len(rows_to_merge)>2:
             print "Too many polygons in problem point geometries!"
         else:
             print ("Lenght of problem geometries!: "+str(len(rows_to_merge)))
-            
-        #Merge Geometries!
-            
+    return featureClass
+
+def eliminateUnwantedTriangles(cutDelaunay_path, polygons, precision):
+    allPoints=extractAllPoints(polygons, precision)
 
 def determineTriangleType(cutDelaunay_path, polygons, triangleType, precision):
     arcpy.AddField_management(cutDelaunay_path, triangleType, "SHORT")
     allPoints=extractAllPoints(polygons, precision)
+    UID_field="UID"
     isDoneFlag= False
     triangles=[]
     # Todo---> add while !isDoneFlag:  loop!
-    with arcpy.da.UpdateCursor(cutDelaunay_path, ["SHAPE@", triangleType, "OID@"]) as cursor:
+    with arcpy.da.UpdateCursor(cutDelaunay_path, ["SHAPE@", triangleType, UID_field]) as cursor:
         while (isDoneFlag==False):
             problem_points={}     # points whose vertices do not coincide with gap polygon vertices. result of arcpy.Clip operation
             triangleNr=0        
@@ -239,7 +246,7 @@ def determineTriangleType(cutDelaunay_path, polygons, triangleType, precision):
                         else:
                             print ("problempoint 1 appended!"+ str(cursor[2]))
                             problem_points[geometry]= {cursor[2]}
-                print ("Triangle No: "+ str(triangleNr))
+                print ("Triangle No: "+ str(triangleNr)+ " ID: "+ str(row[2]))
                 triangleNr+=1
                 print trianglePoints
                 triangles.append((triangleNr, trianglePoints[0], trianglePoints[1]))
