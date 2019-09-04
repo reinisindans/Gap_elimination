@@ -181,30 +181,50 @@ def mergeFeatures(problem_points, featureClass, UID_field):
         fields= arcpy.ListFields(featureClass)
         field_names=[]
         desc=arcpy.Describe(featureClass)
+        geometryType = desc.shapeType
         geometry_field_name=desc.ShapeFieldName
         for field in fields:
             print("{0} is a type of {1} with a length of {2}".format(field.name, field.type, field.length))
             field_names.append(field.name)
+        field_names.pop(0) # remove the OID!!!! Otherwise it messes everythoing up by insert....0r no....
         geometry_index= field_names.index(geometry_field_name)
+        UID_index= field_names.index(UID_field)
+        field_names[geometry_index]='SHAPE@'  #Add extra geometry field because the field list does not really work!!!
+        print ("Field Names: " +str(field_names))
+        
         print ("Found geometry in list of fields, index: "+ str(geometry_index))
         for UID in problem_points[problem_point]:
-            print ("Starting merge, UID of element in "+ problem_point+ " is "+ UID)
+            print ("Starting merge, UID of element in "+ str(problem_point)+ " is "+ str(UID))
             sql=UID_field+"=%s" % (UID)
             print sql
-            with arcpy.da.UpdateCursor(featureClass,field_names,sql) as cursor:
-                for row in cursor: # But should be only one row anyway...
-                    print row[0]
-                    print ("Geometry appended to merge list: "+ str(UID))
-                    rows_to_merge.append(row)
-                    cursor.deleteRow()
-                    # todo continue here- get a working algorithm that deletes the unneeded triangles, and merges them to good ones
-                    # then reformat in separate functions
-        for row in rows_to_merge:
-            print ("This is row! : "+ row[1])
+            with arcpy.da.UpdateCursor(featureClass,field_names,sql) as cursor: # did not manage with sql to get a good geometry- only got point geometries?????!!!!
+                for row in cursor:
+                        print row[0]
+                        print ("Geometry appended to merge list: "+ str(UID))
+                        rows_to_merge.append(row)
+                        cursor.deleteRow()
+                        
         if len(rows_to_merge)>2:
             print "Too many polygons in problem point geometries!"
         else:
             print ("Lenght of problem geometries!: "+str(len(rows_to_merge)))
+        new_polygons=[]
+        while len(rows_to_merge)>1:
+            rows_to_merge[-1][geometry_index]= rows_to_merge[-1][geometry_index].union(rows_to_merge[-2][geometry_index]) # taking all the field values except geometry from the last polygon!
+            new_polygon=rows_to_merge[-1] 
+            new_polygons.append(new_polygon)
+            print ("This is the old Poly: !!")
+            print str(rows_to_merge[-1])
+            rows_to_merge.pop() # removing the merged ones
+            rows_to_merge.pop()
+            print ("MERGE Done!: " +str(new_polygon))
+            print field_names
+        with arcpy.da.InsertCursor(featureClass,field_names) as cursor:
+            for new_poly in new_polygons:
+                print ("INSERTING NEW POLY IN FC!!")
+                print str(new_poly)
+                
+                cursor.insertRow(new_poly)
     return featureClass
 
 def getProblemPoints(cutDelaunay_path, polygons, precision, UID_field):
@@ -231,11 +251,12 @@ def getProblemPoints(cutDelaunay_path, polygons, precision, UID_field):
                                 problem_points[geometry]= {cursor[1]}
                     print ("Triangle No: ID: "+ str(cursor[1]))
                 #check if any problem points only have one associated triangle triangle (Should not happen!!)
-                    for key in problem_points.keys():
-                        if len(problem_points[key])<2:
-                            del problem_points[key]
-                print ("Problem point length: "+ str(len(problem_points)))
-                return problem_points
+    for key in problem_points.keys():
+        if len(problem_points[key])<2:
+            print ("Problempoint "+ str(key)+ " Length: "+ str(len(problem_points[key])))
+            del problem_points[key]
+    print ("Problem point length: "+ str(len(problem_points)))
+    return problem_points
                     
 def determineTriangleType(cutDelaunay_path, polygons, triangleType, precision):
     arcpy.AddField_management(cutDelaunay_path, triangleType, "SHORT")
@@ -248,7 +269,7 @@ def determineTriangleType(cutDelaunay_path, polygons, triangleType, precision):
     # Todo---> add while !isDoneFlag:  loop!
     with arcpy.da.UpdateCursor(cutDelaunay_path, ["SHAPE@", triangleType, UID_field]) as cursor:
         while (isDoneFlag==False):
-            problem_points=getProblemPoints(cutDelaunay_path, polygons, precision, UID_field)     
+            break  # DEBUG BREAK
             triangleNr=0        
             for row in cursor:
                 # triangle type keys.   0 - triangle is equal with original gap polygon
