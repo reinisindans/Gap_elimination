@@ -10,7 +10,6 @@ import math
 def createSubdir(workspace, subdirList):
     for subdir in subdirList:
         if not os.path.isdir(workspace + '/' + subdir):
-            print ("Creating dirs"+ subdir)
             os.mkdir(workspace + '/' + subdir)
 
 def searchSHP(workspace):
@@ -42,7 +41,6 @@ def getHoles(input_fc):
                     in polygon.getPart() or arcpy.Array(arcpy.Array())
                 ), SR
             )
-            print "Updating...."
             cur.updateRow([polygon])
 
 def extractPolygons(singleparts):
@@ -56,7 +54,6 @@ def extractPolygons(singleparts):
                 pnt=array1.getObject(0).getObject(vertice)
                 polygon.append([row[0],pnt.X,pnt.Y])
                 verticeCount+=1
-            print ("Polygon: " + str(row[0]) + " Punkte: "+ str(verticeCount))
             polygons.append(polygon)
     # Visualize
     plt.figure(1)
@@ -87,6 +84,14 @@ def comparePoints(point_dict, comparePoint):
     if comparePoint in point_dict:
         result= point_dict[comparePoint]
     return result
+
+def findPointId(pointXY, polygon, precision):
+    pointID=0
+    for point in polygon:
+        if (round(pointXY[0],precision)==round(point[1], precision) and round(pointXY[1], precision)==round(point[2],precision)):
+            break
+        pointID+=1
+    return pointID
 
 def getMiddlePoint(points):
     point1_X= points[0][0]
@@ -135,12 +140,12 @@ def cut_geometry(to_cut, cutter):
 
     edit.stopEditing(True)
 
-def createDelaunay(temp_path,triangles, polygons, SRS):
+def createDelaunay(temp_path,triangles, polygons, SRS, polygon_nr, UID_field):
     # Creating the new Delaunay .shp
     output_fc= temp_path+"/"+triangles
     arcpy.CreateFeatureclass_management(temp_path, triangles, "POLYGON","" , "DISABLED", "DISABLED", SRS)
-    arcpy.AddField_management(in_table=triangles_path, field_name="PolyNo", field_type='LONG', field_length=10)
-    arcpy.AddField_management(in_table=triangles_path, field_name="UID", field_type='LONG', field_length=10)
+    arcpy.AddField_management(in_table=triangles_path, field_name=polygon_nr, field_type='LONG', field_length=10)
+    arcpy.AddField_management(in_table=triangles_path, field_name=UID_field, field_type='LONG', field_length=10)
 
     # Best practice would be to implement the (slightly) modified delaunay triangulation here, instead of using the ready-made ArcMap functionality
     # Right now I use the Delaunay class from scipy.spatial library. The extra lines are then being tested if the Lines are correctly placed and the wrong ones are deleted. 
@@ -156,11 +161,10 @@ def createDelaunay(temp_path,triangles, polygons, SRS):
         
         plt.figure(2)
         
-        with arcpy.da.InsertCursor(output_fc,['UID','PolyNo','SHAPE@']) as cursor:
+        with arcpy.da.InsertCursor(output_fc,[UID_field,polygon_nr,'SHAPE@']) as cursor:
             for polygon in delaunayTriangulation.simplices:
                 points=[]
                 for point in polygon:
-                    print numpyPolygon[point,1:]
                     point= arcpy.Point(numpyPolygon[point,1],numpyPolygon[point,2])
                     points.append(point)
                 array=arcpy.Array(points)
@@ -184,46 +188,37 @@ def mergeFeatures(problem_points, featureClass, UID_field):
         geometryType = desc.shapeType
         geometry_field_name=desc.ShapeFieldName
         for field in fields:
-            print("{0} is a type of {1} with a length of {2}".format(field.name, field.type, field.length))
             field_names.append(field.name)
+            
         field_names.pop(0) # remove the OID!!!! Otherwise it messes everythoing up by insert....0r no....
         geometry_index= field_names.index(geometry_field_name)
         UID_index= field_names.index(UID_field)
         field_names[geometry_index]='SHAPE@'  #Add extra geometry field because the field list does not really work!!!
-        print ("Field Names: " +str(field_names))
-        
-        print ("Found geometry in list of fields, index: "+ str(geometry_index))
+
+
         for UID in problem_points[problem_point]:
-            print ("Starting merge, UID of element in "+ str(problem_point)+ " is "+ str(UID))
             sql=UID_field+"=%s" % (UID)
-            print sql
-            with arcpy.da.UpdateCursor(featureClass,field_names,sql) as cursor: # did not manage with sql to get a good geometry- only got point geometries?????!!!!
+            with arcpy.da.UpdateCursor(featureClass,field_names,sql) as cursor:
                 for row in cursor:
-                        print row[0]
-                        print ("Geometry appended to merge list: "+ str(UID))
                         rows_to_merge.append(row)
                         cursor.deleteRow()
                         
         if len(rows_to_merge)>2:
             print "Too many polygons in problem point geometries!"
-        else:
-            print ("Lenght of problem geometries!: "+str(len(rows_to_merge)))
+
         new_polygons=[]
         while len(rows_to_merge)>1:
             rows_to_merge[-1][geometry_index]= rows_to_merge[-1][geometry_index].union(rows_to_merge[-2][geometry_index]) # taking all the field values except geometry from the last polygon!
-            new_polygon=rows_to_merge[-1] 
+            new_polygon=rows_to_merge[-1]
+            new_polygon[geometry_index]= new_polygon[geometry_index].generalize(0) # remove the extra vertice
             new_polygons.append(new_polygon)
-            print ("This is the old Poly: !!")
-            print str(rows_to_merge[-1])
+
             rows_to_merge.pop() # removing the merged ones
             rows_to_merge.pop()
-            print ("MERGE Done!: " +str(new_polygon))
-            print field_names
+            pointArray=new_polygon[0].getPart()
+            
         with arcpy.da.InsertCursor(featureClass,field_names) as cursor:
-            for new_poly in new_polygons:
-                print ("INSERTING NEW POLY IN FC!!")
-                print str(new_poly)
-                
+            for new_poly in new_polygons:                               
                 cursor.insertRow(new_poly)
     return featureClass
 
@@ -236,79 +231,75 @@ def getProblemPoints(cutDelaunay_path, polygons, precision, UID_field):
                     for vertice in range(row[0].pointCount):
                         pnt=array.getObject(0).getObject(vertice)
                         geometry=(round(pnt.X,precision),round(pnt.Y,precision))
-                        print geometry
                         result= comparePoints(allPoints, geometry)
-                        if result ==[]:  # Point is not one of the original Polygon Vertices!
-                            print "Problem Point!!!"
+                        if result ==[]:  # Point is not one of the original Polygon Vertices!                            
                             if geometry in problem_points:
-                                print ("Problempoint 2 appended: "+str(cursor[1])+ " to : "+ str(problem_points[geometry]))
                                 problem_set= problem_points[geometry]
                                 problem_set.add(cursor[1])
-                                problem_points[geometry]= problem_set # format: key: coordinates, value: IDs of Triangles
-                                print problem_points[geometry]
+                                problem_points[geometry]= problem_set # format: key: coordinates, value: IDs of Triangles                                
                             else:
-                                print ("problempoint 1 appended!"+ str(cursor[1]))
-                                problem_points[geometry]= {cursor[1]}
-                    print ("Triangle No: ID: "+ str(cursor[1]))
-                #check if any problem points only have one associated triangle triangle (Should not happen!!)
+                                problem_points[geometry]= {cursor[1]}                
+        #check if any problem points only have one associated triangle triangle (Should not happen!!)
     for key in problem_points.keys():
-        if len(problem_points[key])<2:
-            print ("Problempoint "+ str(key)+ " Length: "+ str(len(problem_points[key])))
+        if len(problem_points[key])<2:            
             del problem_points[key]
-    print ("Problem point length: "+ str(len(problem_points)))
     return problem_points
-                    
-def determineTriangleType(cutDelaunay_path, polygons, triangleType, precision):
-    arcpy.AddField_management(cutDelaunay_path, triangleType, "SHORT")
-    allPoints=extractAllPoints(polygons, precision)
-    UID_field="UID"
-    isDoneFlag= False
-    triangles=[]
+
+def eliminateFalseTriangles(cutDelaunay_path, polygons, precision, UID_field):
     problem_points=getProblemPoints(cutDelaunay_path, polygons, precision, UID_field) # points whose vertices do not coincide with gap polygon vertices. result of arcpy.Clip operation
-    mergeFeatures(problem_points, cutDelaunay_path, UID_field)
+    mergeFeatures(problem_points, cutDelaunay_path, UID_field)    
+                    
+def determineTriangleType(cutDelaunay_path, polygons, triangleType, precision, polygon_nr, UID_field):
+
+    arcpy.AddField_management(cutDelaunay_path, triangleType, "SHORT")
+
+    allPoints=extractAllPoints(polygons, precision)
+
+    triangles=[]
     # Todo---> add while !isDoneFlag:  loop!
-    with arcpy.da.UpdateCursor(cutDelaunay_path, ["SHAPE@", triangleType, UID_field]) as cursor:
-        while (isDoneFlag==False):
-            break  # DEBUG BREAK
-            triangleNr=0        
-            for row in cursor:
-                # triangle type keys.   0 - triangle is equal with original gap polygon
-                #                       1 - triangle shares 2 sides with original gap poly, 1 extra point needed, plus the middle vertice
-                #                       2 - tri shares 1 side w/ gap polygon, 2 extra points needed as middlepoints
-                #                       3 - tri shares no sides w/ gap polygon, 3 middlepoints + centroid needed! 
-                triangleType=3
-                trianglePoints=[]
-                array=row[0].getPart()
+    with arcpy.da.UpdateCursor(cutDelaunay_path, ["SHAPE@", triangleType, polygon_nr, UID_field]) as cursor:        
+        for row in cursor:
+            # triangle type keys.   0 - error in determining the triangle type
+            #                       1 - triangle is equal with original gap polygon
+            #                       2 - triangle shares 2 sides with original gap poly, 1 extra point needed, plus the middle vertice
+            #                       3 - tri shares 1 side w/ gap polygon, 2 extra points needed as middlepoints
+            #                       4 - tri shares no sides w/ gap polygon, 3 middlepoints + centroid needed!
+            geometry=row[0]
+            if len(polygons[row[2]])==4: # Triangle equals original polygon - when Polygon is triangle itself
+                row[1]=0
+            else:
+                array=geometry.getPart()
+                pointIDs=[]
+
                 for vertice in range(row[0].pointCount):
                     pnt=array.getObject(0).getObject(vertice)
-                    geometry=(round(pnt.X,precision),round(pnt.Y,precision))
-                    print geometry
-                    result= comparePoints(allPoints, geometry)
-                    if result!=[]:
-                        trianglePoints.append(result)
-                    else:
-                        print "Problem Point!!!"
-                        if geometry in problem_points:
-                            print ("Problempoint 2 appended: "+str(cursor[2])+ " to : "+ str(problem_points[geometry]))
-                            problem_set= problem_points[geometry]
-                            problem_set.add(cursor[2])
-                            problem_points[geometry]= problem_set # format: key: coordinates, value: IDs of Triangles
-                            print problem_points[geometry]
-                        else:
-                            print ("problempoint 1 appended!"+ str(cursor[2]))
-                            problem_points[geometry]= {cursor[2]}
-                print ("Triangle No: "+ str(triangleNr)+ " ID: "+ str(row[2]))
-                triangleNr+=1
-                print trianglePoints
-                triangles.append((triangleNr, trianglePoints[0], trianglePoints[1]))
-            # done with vertice search!
-            if problem_points != {}:
-                mergeFeatures(problem_points, cutDelaunay_path, UID_field)
-                cursor.reset()
-            else:
-                isDoneFlag= True
-        ##print triangles
-        #isDoneFlag= True # remove after debug, added to avoid loop!
+                    pointXY=[pnt.X,pnt.Y]
+                    pointId=findPointId(pointXY, polygons[row[2]], precision)
+                    pointIDs.append(pointId)
+                    
+                    
+                
+                polygonString=""
+                
+                for i in range(len(polygons[row[2]])-2):
+                    polygonString= polygonString+ str(i)
+                polygonString= polygonString*2
+                IDstring="".join(sorted(str(pointIDs[:-1])))
+                IDstring = IDstring.translate(None, ',][ ')
+                if (polygonString.find(IDstring)!=-1): # triangle shares 2 sides with original gap poly
+                    row[1]=1
+                    print ("1 !!!: "+ IDstring)
+                    print ("POlyString: "+ polygonString)
+                elif (polygonString.find(IDstring[:-1])!=-1 or polygonString.find(IDstring[1:])!=-1): #tri shares 1 side w/ gap polygon
+                    row[1]=2
+                    print ("2 !!!: "+ IDstring[:-1])
+                    print ("POlyString: "+ polygonString)
+                elif (polygonString.find(IDstring[:-2])!=-1):  #tri shares no sides w/ gap polygon
+                    row[1]=3
+                    #print ("3 !!!: "+ IDstring[:-2])
+                else:
+                    row[1]=-1
+            cursor.updateRow(row)
             
     
 
@@ -330,6 +321,8 @@ triangles_path= temp_path+"/"+triangles
 cutDelaunay_path=temp_path+"/cutDelaunay.shp"
 triangleType="tri_type"
 precision=4
+UID_field="UID"
+polygon_nr="PolyNo"
 
 # Find gaps in polygon layer: 1) union 2) fill Gaps 3) Difference 4) To Singleparts
 arcpy.Dissolve_management (input_shapefile, dissolved)
@@ -341,13 +334,16 @@ arcpy.MultipartToSinglepart_management (holes, singleparts)
 # Delaunay lines 2) create triangle-Polygons using the Vertices of Polygon and
 # Delaunay line middle points
 polygons=extractPolygons(singleparts)
+
 # creating the triangle shapefile
-createDelaunay(temp_path,triangles, polygons, SRS)
+createDelaunay(temp_path,triangles, polygons, SRS, polygon_nr, UID_field)
+
 #cut delauney with original holes to remove extras
 arcpy.Clip_analysis(triangles_path, holes, cutDelaunay_path)
 
-determineTriangleType(cutDelaunay_path,polygons , triangleType, precision)
+eliminateFalseTriangles(cutDelaunay_path, polygons, precision, UID_field)
 
+determineTriangleType(cutDelaunay_path,polygons , triangleType, precision, polygon_nr, UID_field)
 
 plt.show()
 
