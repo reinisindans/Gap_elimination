@@ -45,3 +45,9 @@ Polys/lines.shp
 Polys/lines.shx
 Temp/triangles.shp.GEOPOOL41.6384.3664.sr.lock
 *.lock
+Temp/cutLines.cpg
+Temp/cutLines.dbf
+Temp/cutLines.prj
+Temp/cutLines.shp
+Temp/cutLines.shp.xml
+Temp/cutLines.shx

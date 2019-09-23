@@ -140,13 +140,15 @@ def cut_geometry(to_cut, cutter):
 
     edit.stopEditing(True)
 
-def createDelaunay(temp_path,triangles, polygons, SRS, polygon_nr, UID_field):
+def createDelaunay(temp_path,triangles, polygons, SRS, polygon_nr, UID_field, point_order , original_order):
     # Creating the new Delaunay .shp
     output_fc= temp_path+"/"+triangles
     arcpy.CreateFeatureclass_management(temp_path, triangles, "POLYGON","" , "DISABLED", "DISABLED", SRS)
     arcpy.AddField_management(in_table=triangles_path, field_name=polygon_nr, field_type='LONG', field_length=10)
     arcpy.AddField_management(in_table=triangles_path, field_name=UID_field, field_type='LONG', field_length=10)
-
+    arcpy.AddField_management(in_table=triangles_path, field_name=point_order, field_type='TEXT', field_length=10)
+    arcpy.AddField_management(in_table=triangles_path, field_name=original_order, field_type='TEXT', field_length=10)
+    
     # Best practice would be to implement the (slightly) modified delaunay triangulation here, instead of using the ready-made ArcMap functionality
     # Right now I use the Delaunay class from scipy.spatial library. The extra lines are then being tested if the Lines are correctly placed and the wrong ones are deleted. 
     uid=0
@@ -239,7 +241,7 @@ def getProblemPoints(cutDelaunay_path, polygons, precision, UID_field):
                                 problem_points[geometry]= problem_set # format: key: coordinates, value: IDs of Triangles                                
                             else:
                                 problem_points[geometry]= {cursor[1]}                
-        #check if any problem points only have one associated triangle triangle (Should not happen!!)
+        #check if any problem points only have one associated triangle (Should not happen!!)
     for key in problem_points.keys():
         if len(problem_points[key])<2:            
             del problem_points[key]
@@ -249,21 +251,21 @@ def eliminateFalseTriangles(cutDelaunay_path, polygons, precision, UID_field):
     problem_points=getProblemPoints(cutDelaunay_path, polygons, precision, UID_field) # points whose vertices do not coincide with gap polygon vertices. result of arcpy.Clip operation
     mergeFeatures(problem_points, cutDelaunay_path, UID_field)    
                     
-def determineTriangleType(cutDelaunay_path, polygons, triangleType, precision, polygon_nr, UID_field):
+def determineTriangleType(cutDelaunay_path, polygons, triangleType, precision, polygon_nr, UID_field, point_order, original_order):
 
     arcpy.AddField_management(cutDelaunay_path, triangleType, "SHORT")
 
     allPoints=extractAllPoints(polygons, precision)
 
     triangles=[]
-    # Todo---> add while !isDoneFlag:  loop!
-    with arcpy.da.UpdateCursor(cutDelaunay_path, ["SHAPE@", triangleType, polygon_nr, UID_field]) as cursor:        
+    
+    with arcpy.da.UpdateCursor(cutDelaunay_path, ["SHAPE@", triangleType, polygon_nr, UID_field, point_order, original_order]) as cursor:        
         for row in cursor:
-            # triangle type keys.   0 - error in determining the triangle type
-            #                       1 - triangle is equal with original gap polygon
-            #                       2 - triangle shares 2 sides with original gap poly, 1 extra point needed, plus the middle vertice
-            #                       3 - tri shares 1 side w/ gap polygon, 2 extra points needed as middlepoints
-            #                       4 - tri shares no sides w/ gap polygon, 3 middlepoints + centroid needed!
+            # triangle type keys.   -1 - error in determining the triangle type
+            #                       0 - triangle is equal with original gap polygon
+            #                       1 - triangle shares 2 sides with original gap poly, 1 extra point needed, plus the middle vertice
+            #                       2 - tri shares 1 side w/ gap polygon, 2 extra points needed as middlepoints
+            #                       3 - tri shares no sides w/ gap polygon, 3 middlepoints + centroid needed!
             geometry=row[0]
             if len(polygons[row[2]])==4: # Triangle equals original polygon - when Polygon is triangle itself
                 row[1]=0
@@ -277,31 +279,72 @@ def determineTriangleType(cutDelaunay_path, polygons, triangleType, precision, p
                     pointId=findPointId(pointXY, polygons[row[2]], precision)
                     pointIDs.append(pointId)
                     
-                    
-                
                 polygonString=""
+                print
+                print ("PolygonNo: "+ str(row[3]))
+                print str(pointIDs)
+                print str(pointIDs[:-1])
                 
-                for i in range(len(polygons[row[2]])-2):
+                for i in range(len(polygons[row[2]])-1):
                     polygonString= polygonString+ str(i)
                 polygonString= polygonString*2
-                IDstring="".join(sorted(str(pointIDs[:-1])))
+                row[5]=polygonString
+                IDstring="".join(str(pointIDs))
                 IDstring = IDstring.translate(None, ',][ ')
-                if (polygonString.find(IDstring)!=-1): # triangle shares 2 sides with original gap poly
+                row[4]=IDstring
+                IDstring_sorted="".join(sorted(str(pointIDs[:-1])))
+                IDstring_sorted = IDstring_sorted.translate(None, ',][ ')
+                print ("IDString: "+ IDstring)
+                print ("IDStringsorted: "+ IDstring)
+                if ((polygonString.find(IDstring[:-1])!=-1 or polygonString.find(IDstring[1:])!=-1)): # triangle shares 2 sides with original gap poly
                     row[1]=1
                     print ("1 !!!: "+ IDstring)
                     print ("POlyString: "+ polygonString)
-                elif (polygonString.find(IDstring[:-1])!=-1 or polygonString.find(IDstring[1:])!=-1): #tri shares 1 side w/ gap polygon
+                elif (polygonString.find(IDstring_sorted[:-1])!=-1 or polygonString.find(IDstring_sorted[1:])!=-1): #tri shares 1 side w/ gap polygon
                     row[1]=2
                     print ("2 !!!: "+ IDstring[:-1])
                     print ("POlyString: "+ polygonString)
-                elif (polygonString.find(IDstring[:-2])!=-1):  #tri shares no sides w/ gap polygon
+                elif (polygonString.find(IDstring_sorted[:-2])!=-1 or polygonString.find(IDstring_sorted[-2:])!=-1):  #tri shares no sides w/ gap polygon
                     row[1]=3
-                    #print ("3 !!!: "+ IDstring[:-2])
+                    print ("3 !!!: "+ IDstring[:-2])
+                    print ("POlyString: "+ polygonString)
                 else:
                     row[1]=-1
             cursor.updateRow(row)
-            
-    
+
+def strToIntList(string):
+    myList=[]
+    for element in string:
+        print element
+        try:
+            myList.append(int(element))
+        except:
+            print("The string element can not be converted to int!?")
+    return myList
+
+def createLines(temp_path, line_shapefile, triangle_shapefile, SRS, polygon_nr, UID_field, triangleType, point_order, original_order):
+    arcpy.CreateFeatureclass_management(temp_path, line_shapefile, "POLYLINE","" , "DISABLED", "DISABLED", SRS)
+    lines_path=temp_path+"/"+line_shapefile
+    arcpy.AddField_management(in_table=lines_path, field_name=polygon_nr, field_type='LONG', field_length=10)
+    arcpy.AddField_management(in_table=lines_path, field_name=UID_field, field_type='LONG', field_length=10)
+
+    with arcpy.da.SearchCursor(triangle_shapefile, ["SHAPE@", polygon_nr, UID_field, triangleType, point_order, original_order]) as triangle_cur:
+        for triangle_row in triangle_cur:
+            #print("Feature {}:".format(triangle_row[0]))
+            vertexArray = arcpy.Array()
+            li = strToIntList(triangle_row[4])
+            print triangle_row[4]
+            print str(li)
+            if triangle_row[3] > 0:
+                print "This is a Feature of class!"
+                for part in triangle_row[0]:
+                    for pnt in part:
+                        if pnt:
+                            longt = pnt.X
+                            lat = pnt.Y
+                            point = arcpy.Point(longt,lat)
+                            #print point
+                            vertexArray.add(point)
 
 # MAIN
 arcpy.env.overwriteOutput = True
@@ -318,11 +361,15 @@ holes=temp_path+"/holes.shp"
 singleparts=temp_path+"/singleparts.shp"
 triangles="triangles.shp"
 triangles_path= temp_path+"/"+triangles
-cutDelaunay_path=temp_path+"/cutDelaunay.shp"
+cut_Delaunay="cutDelaunay.shp"
+cutDelaunay_path=temp_path+"/"+cut_Delaunay
+line_shapefile="cutLines.shp"
 triangleType="tri_type"
 precision=4
 UID_field="UID"
 polygon_nr="PolyNo"
+point_order="Pnt_order"
+original_order= "Orig_order"
 
 # Find gaps in polygon layer: 1) union 2) fill Gaps 3) Difference 4) To Singleparts
 arcpy.Dissolve_management (input_shapefile, dissolved)
@@ -336,14 +383,16 @@ arcpy.MultipartToSinglepart_management (holes, singleparts)
 polygons=extractPolygons(singleparts)
 
 # creating the triangle shapefile
-createDelaunay(temp_path,triangles, polygons, SRS, polygon_nr, UID_field)
+createDelaunay(temp_path,triangles, polygons, SRS, polygon_nr, UID_field, point_order , original_order)
 
 #cut delauney with original holes to remove extras
 arcpy.Clip_analysis(triangles_path, holes, cutDelaunay_path)
 
 eliminateFalseTriangles(cutDelaunay_path, polygons, precision, UID_field)
 
-determineTriangleType(cutDelaunay_path,polygons , triangleType, precision, polygon_nr, UID_field)
+determineTriangleType(cutDelaunay_path,polygons , triangleType, precision, polygon_nr, UID_field, point_order, original_order)
+
+createLines(temp_path, line_shapefile, cutDelaunay_path, SRS, polygon_nr, UID_field, triangleType, point_order, original_order)
 
 plt.show()
 
