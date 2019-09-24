@@ -94,6 +94,7 @@ def findPointId(pointXY, polygon, precision):
     return pointID
 
 def getMiddlePoint(points):
+    print ("Points: "+ str(points)) 
     point1_X= points[0][0]
     point1_Y= points[0][1]
     point2_X= points[1][0]
@@ -279,12 +280,7 @@ def determineTriangleType(cutDelaunay_path, polygons, triangleType, precision, p
                     pointId=findPointId(pointXY, polygons[row[2]], precision)
                     pointIDs.append(pointId)
                     
-                polygonString=""
-                print
-                print ("PolygonNo: "+ str(row[3]))
-                print str(pointIDs)
-                print str(pointIDs[:-1])
-                
+                polygonString=""                
                 for i in range(len(polygons[row[2]])-1):
                     polygonString= polygonString+ str(i)
                 polygonString= polygonString*2
@@ -294,20 +290,12 @@ def determineTriangleType(cutDelaunay_path, polygons, triangleType, precision, p
                 row[4]=IDstring
                 IDstring_sorted="".join(sorted(str(pointIDs[:-1])))
                 IDstring_sorted = IDstring_sorted.translate(None, ',][ ')
-                print ("IDString: "+ IDstring)
-                print ("IDStringsorted: "+ IDstring)
                 if ((polygonString.find(IDstring[:-1])!=-1 or polygonString.find(IDstring[1:])!=-1)): # triangle shares 2 sides with original gap poly
                     row[1]=1
-                    print ("1 !!!: "+ IDstring)
-                    print ("POlyString: "+ polygonString)
                 elif (polygonString.find(IDstring_sorted[:-1])!=-1 or polygonString.find(IDstring_sorted[1:])!=-1): #tri shares 1 side w/ gap polygon
                     row[1]=2
-                    print ("2 !!!: "+ IDstring[:-1])
-                    print ("POlyString: "+ polygonString)
                 elif (polygonString.find(IDstring_sorted[:-2])!=-1 or polygonString.find(IDstring_sorted[-2:])!=-1):  #tri shares no sides w/ gap polygon
                     row[1]=3
-                    print ("3 !!!: "+ IDstring[:-2])
-                    print ("POlyString: "+ polygonString)
                 else:
                     row[1]=-1
             cursor.updateRow(row)
@@ -322,7 +310,7 @@ def strToIntList(string):
             print("The string element can not be converted to int!?")
     return myList
 
-def createLines(temp_path, line_shapefile, triangle_shapefile, SRS, polygon_nr, UID_field, triangleType, point_order, original_order):
+def createLines(temp_path, line_shapefile, triangle_shapefile, SRS, polygon_nr, UID_field, triangleType, point_order, original_order, polygons):
     arcpy.CreateFeatureclass_management(temp_path, line_shapefile, "POLYLINE","" , "DISABLED", "DISABLED", SRS)
     lines_path=temp_path+"/"+line_shapefile
     arcpy.AddField_management(in_table=lines_path, field_name=polygon_nr, field_type='LONG', field_length=10)
@@ -330,21 +318,56 @@ def createLines(temp_path, line_shapefile, triangle_shapefile, SRS, polygon_nr, 
 
     with arcpy.da.SearchCursor(triangle_shapefile, ["SHAPE@", polygon_nr, UID_field, triangleType, point_order, original_order]) as triangle_cur:
         for triangle_row in triangle_cur:
-            #print("Feature {}:".format(triangle_row[0]))
-            vertexArray = arcpy.Array()
-            li = strToIntList(triangle_row[4])
-            print triangle_row[4]
-            print str(li)
             if triangle_row[3] > 0:
-                print "This is a Feature of class!"
-                for part in triangle_row[0]:
-                    for pnt in part:
-                        if pnt:
-                            longt = pnt.X
-                            lat = pnt.Y
-                            point = arcpy.Point(longt,lat)
-                            #print point
-                            vertexArray.add(point)
+                #print("Feature {}:".format(triangle_row[0]))
+                lineVertexArray = arcpy.Array()
+                triangleVerticeIndices = strToIntList(triangle_row[4])
+                triangleVerticeIndices.pop(3) # remove the last entry (because equal to the first...) better way would be to use sets
+                print str(triangleVerticeIndices)
+                originalVertices = strToIntList(triangle_row[5])
+                print str(triangleVerticeIndices)
+                if triangle_row[3] == 1: # get max and min of the array, create point between them. the remaining point is the other point of the line
+                    print "This is a Feature of class 1!"
+                    print str(polygons)
+                    minElementIndex = triangleVerticeIndices.index(min(triangleVerticeIndices))
+                    maxElementIndex = triangleVerticeIndices.index(max(triangleVerticeIndices))
+                    print ("Min Max Index: "+ str(minElementIndex)+ "   "+ str(maxElementIndex))
+                    pointPoint = 0
+                    middlePoint = 0
+                    for elem in triangleVerticeIndices:
+                        if (elem != min(triangleVerticeIndices) and elem != max(triangleVerticeIndices)):
+                            pointElement = polygons[triangle_row[1]][elem]
+                            
+                    for part in triangle_row[0]: # but should only be one part!
+                        minPoint = polygons[triangle_row[1]][min(triangleVerticeIndices)]
+                        maxPoint = polygons[triangle_row[1]][max(triangleVerticeIndices)]
+                        points =(minPoint, maxPoint)
+                        middlePoint = getMiddlePoint(points)
+                        middlePoint = arcpy.Point(middlePoint[0], middlePoint[1]) # convert to arcpy Point object
+                        pointPoint= arcpy.Point(pointPoint[0], pointPoint[1])
+                        lineVertexArray.add(middlePoint)
+                        lineVertexArray.add(pointPoint)
+                        polyline = arcpy.Polyline(lineVertexArray)
+                        
+                        print "MiddlePoint: " + str(middlePoint)
+                        '''    
+                        minPoint= [part[minElementIndex].X,part[minElementIndex].Y]
+                        maxPoint= [part[maxElementIndex].X,part[maxElementIndex].Y]
+                        print str(minPoint)
+                        points = (minPoint, maxPoint)
+                        middlePoint = getMiddlePoint(points)
+                        middlePoint = arcpy.Point(middlePoint[0], middlePoint[1]) # convert to arcpy Point object
+                        pointPoint = [part[pointElementIndex].X, part[pointElementIndex].Y]
+                        pointPoint= arcpy.Point(pointPoint[0], pointPoint[1])
+                        lineVertexArray.add(middlePoint)
+                        lineVertexArray.add(pointPoint)
+                        polyline = arcpy.Polyline(lineVertexArray)
+                        print "MiddlePoint: " + str(middlePoint)
+                        '''
+                        # insert polyline:
+                        with arcpy.da.InsertCursor(temp_path + "/" + line_shapefile, ["SHAPE@", polygon_nr, UID_field]) as line_cur:
+                            polyline = arcpy.Polyline(lineVertexArray, SRS)
+                            line_cur.insertRow([polyline, triangle_row[1],triangle_row[2]])
 
 # MAIN
 arcpy.env.overwriteOutput = True
@@ -392,7 +415,7 @@ eliminateFalseTriangles(cutDelaunay_path, polygons, precision, UID_field)
 
 determineTriangleType(cutDelaunay_path,polygons , triangleType, precision, polygon_nr, UID_field, point_order, original_order)
 
-createLines(temp_path, line_shapefile, cutDelaunay_path, SRS, polygon_nr, UID_field, triangleType, point_order, original_order)
+createLines(temp_path, line_shapefile, cutDelaunay_path, SRS, polygon_nr, UID_field, triangleType, point_order, original_order, polygons)
 
 plt.show()
 
