@@ -273,7 +273,7 @@ def determineTriangleType(cutDelaunay_path, polygons, triangleType, precision, p
             else:
                 array=geometry.getPart()
                 pointIDs=[]
-
+                #print ("Getting type polygons: " + str(polygons[row[2]]))
                 for vertice in range(row[0].pointCount):
                     pnt=array.getObject(0).getObject(vertice)
                     pointXY=[pnt.X,pnt.Y]
@@ -328,28 +328,27 @@ def createLines(temp_path, line_shapefile, triangle_shapefile, SRS, polygon_nr, 
                 print str(triangleVerticeIndices)
                 if triangle_row[3] == 1: # get max and min of the array, create point between them. the remaining point is the other point of the line
                     print "This is a Feature of class 1!"
-                    print str(polygons)
-                    minElementIndex = triangleVerticeIndices.index(min(triangleVerticeIndices))
-                    maxElementIndex = triangleVerticeIndices.index(max(triangleVerticeIndices))
-                    print ("Min Max Index: "+ str(minElementIndex)+ "   "+ str(maxElementIndex))
+                    # print str(polygons)
                     pointPoint = 0
                     middlePoint = 0
+                    pointElement = 0
                     for elem in triangleVerticeIndices:
                         if (elem != min(triangleVerticeIndices) and elem != max(triangleVerticeIndices)):
-                            pointElement = polygons[triangle_row[1]][elem]
+                            pointElement = [polygons[triangle_row[1]][elem][1],polygons[triangle_row[1]][elem][2]]
+                            print str(pointElement)
                             
                     for part in triangle_row[0]: # but should only be one part!
-                        minPoint = polygons[triangle_row[1]][min(triangleVerticeIndices)]
-                        maxPoint = polygons[triangle_row[1]][max(triangleVerticeIndices)]
+                        minPoint = [polygons[triangle_row[1]][min(triangleVerticeIndices)][1], polygons[triangle_row[1]][min(triangleVerticeIndices)][2]]
+                        maxPoint = [polygons[triangle_row[1]][max(triangleVerticeIndices)][1], polygons[triangle_row[1]][max(triangleVerticeIndices)][2]]
                         points =(minPoint, maxPoint)
                         middlePoint = getMiddlePoint(points)
                         middlePoint = arcpy.Point(middlePoint[0], middlePoint[1]) # convert to arcpy Point object
-                        pointPoint= arcpy.Point(pointPoint[0], pointPoint[1])
+                        print "MiddlePoint: " + str(middlePoint)
+                        pointPoint= arcpy.Point(pointElement[0], pointElement[1])
                         lineVertexArray.add(middlePoint)
                         lineVertexArray.add(pointPoint)
                         polyline = arcpy.Polyline(lineVertexArray)
                         
-                        print "MiddlePoint: " + str(middlePoint)
                         '''    
                         minPoint= [part[minElementIndex].X,part[minElementIndex].Y]
                         maxPoint= [part[maxElementIndex].X,part[maxElementIndex].Y]
@@ -366,7 +365,7 @@ def createLines(temp_path, line_shapefile, triangle_shapefile, SRS, polygon_nr, 
                         '''
                         # insert polyline:
                         with arcpy.da.InsertCursor(temp_path + "/" + line_shapefile, ["SHAPE@", polygon_nr, UID_field]) as line_cur:
-                            polyline = arcpy.Polyline(lineVertexArray, SRS)
+                            polyline = arcpy.Polyline(lineVertexArray)
                             line_cur.insertRow([polyline, triangle_row[1],triangle_row[2]])
 
 # MAIN
