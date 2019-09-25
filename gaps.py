@@ -100,9 +100,21 @@ def getMiddlePoint(points):
     point2_X= points[1][0]
     point2_Y= points[1][1]
     middlePoint_X= (point1_X+point2_X)/2
-    middlePoint_Y= (point2_Y+point2_Y)/2
+    middlePoint_Y= (point1_Y+point2_Y)/2
     middlePoint=[middlePoint_X, middlePoint_Y]
     return middlePoint
+
+def getTriangleCentroid(points):
+    point1_X= points[0][0]
+    point1_Y= points[0][1]
+    point2_X= points[1][0]
+    point2_Y= points[1][1]
+    point3_X= points[2][0]
+    point3_Y= points[2][1]
+    centroid_X= (point1_X+point2_X+point3_X)/3
+    centroid_Y= (point1_Y+point2_Y+point3_Y)/3
+    centroid=[centroid_X, centroid_Y]
+    return centroid
 
 def cut_geometry(to_cut, cutter):
     """
@@ -303,7 +315,6 @@ def determineTriangleType(cutDelaunay_path, polygons, triangleType, precision, p
 def strToIntList(string):
     myList=[]
     for element in string:
-        print element
         try:
             myList.append(int(element))
         except:
@@ -319,55 +330,91 @@ def createLines(temp_path, line_shapefile, triangle_shapefile, SRS, polygon_nr, 
     with arcpy.da.SearchCursor(triangle_shapefile, ["SHAPE@", polygon_nr, UID_field, triangleType, point_order, original_order]) as triangle_cur:
         for triangle_row in triangle_cur:
             if triangle_row[3] > 0:
-                #print("Feature {}:".format(triangle_row[0]))
                 lineVertexArray = arcpy.Array()
-                triangleVerticeIndices = strToIntList(triangle_row[4])
-                triangleVerticeIndices.pop(3) # remove the last entry (because equal to the first...) better way would be to use sets
-                print str(triangleVerticeIndices)
+                triangleVertices = strToIntList(triangle_row[4])
+                print str(triangleVertices)
                 originalVertices = strToIntList(triangle_row[5])
-                print str(triangleVerticeIndices)
-                if triangle_row[3] == 1: # get max and min of the array, create point between them. the remaining point is the other point of the line
-                    print "This is a Feature of class 1!"
-                    # print str(polygons)
-                    pointPoint = 0
+                point_1=0
+                point_2=0
+                if triangle_row[3] == 1: # Get the points that are following one another. The "jump" in point indexing is the vertice where the middle has to be determined
                     middlePoint = 0
-                    pointElement = 0
-                    for elem in triangleVerticeIndices:
-                        if (elem != min(triangleVerticeIndices) and elem != max(triangleVerticeIndices)):
-                            pointElement = [polygons[triangle_row[1]][elem][1],polygons[triangle_row[1]][elem][2]]
-                            print str(pointElement)
-                            
-                    for part in triangle_row[0]: # but should only be one part!
-                        minPoint = [polygons[triangle_row[1]][min(triangleVerticeIndices)][1], polygons[triangle_row[1]][min(triangleVerticeIndices)][2]]
-                        maxPoint = [polygons[triangle_row[1]][max(triangleVerticeIndices)][1], polygons[triangle_row[1]][max(triangleVerticeIndices)][2]]
-                        points =(minPoint, maxPoint)
-                        middlePoint = getMiddlePoint(points)
-                        middlePoint = arcpy.Point(middlePoint[0], middlePoint[1]) # convert to arcpy Point object
-                        print "MiddlePoint: " + str(middlePoint)
-                        pointPoint= arcpy.Point(pointElement[0], pointElement[1])
-                        lineVertexArray.add(middlePoint)
-                        lineVertexArray.add(pointPoint)
+                    for index in range(len(triangleVertices)-1): # get the points that are relevant for line end at middle of vertice
+                        if (triangleVertices[index]+1 != triangleVertices[index+1]):
+                            minPoint = [polygons[triangle_row[1]][triangleVertices[index]][1], polygons[triangle_row[1]][triangleVertices[index]][2]]
+                            maxPoint = [polygons[triangle_row[1]][triangleVertices[index+1]][1], polygons[triangle_row[1]][triangleVertices[index+1]][2]]
+                            points=(minPoint,maxPoint)
+                            middlePoint = getMiddlePoint(points)
+                            middlePoint = arcpy.Point(middlePoint[0], middlePoint[1]) # convert to arcpy Point object
+                            point_1=triangleVertices[index]
+                            point_2=triangleVertices[index+1]
+                            break 
+                    for index in reversed(range(len(triangleVertices))): # find the point that is also a point in original polygon
+                        if triangleVertices[index] == point_1 or triangleVertices[index] == point_2:
+                            triangleVertices.pop(index)
+                    
+                    pointyPoint = [polygons[triangle_row[1]][triangleVertices[0]][1], polygons[triangle_row[1]][triangleVertices[0]][2]]
+                    pointyPoint= arcpy.Point(pointyPoint[0], pointyPoint[1])
+                    lineVertexArray.add(middlePoint)
+                    lineVertexArray.add(pointyPoint)
+                    polyline = arcpy.Polyline(lineVertexArray)
+                    # insert polyline:
+                    with arcpy.da.InsertCursor(temp_path + "/" + line_shapefile, ["SHAPE@", polygon_nr, UID_field]) as line_cur:
                         polyline = arcpy.Polyline(lineVertexArray)
+                        line_cur.insertRow([polyline, triangle_row[1],triangle_row[2]])
                         
-                        '''    
-                        minPoint= [part[minElementIndex].X,part[minElementIndex].Y]
-                        maxPoint= [part[maxElementIndex].X,part[maxElementIndex].Y]
-                        print str(minPoint)
-                        points = (minPoint, maxPoint)
-                        middlePoint = getMiddlePoint(points)
-                        middlePoint = arcpy.Point(middlePoint[0], middlePoint[1]) # convert to arcpy Point object
-                        pointPoint = [part[pointElementIndex].X, part[pointElementIndex].Y]
-                        pointPoint= arcpy.Point(pointPoint[0], pointPoint[1])
-                        lineVertexArray.add(middlePoint)
-                        lineVertexArray.add(pointPoint)
+                if triangle_row[3] == 2: # get the two lines from whom the middle has to be extracted
+                    commonPoint=0
+                    triangleVertices[3]=triangleVertices[2]+1 # adjust to take into account that 0 point index follows after the last point index
+                    for index in range(len(triangleVertices)-1):
+                        if (triangleVertices[index]+1 == triangleVertices[index+1]): # find the point indices that are following one another
+                            point_on_line_1 = [polygons[triangle_row[1]][triangleVertices[index]][1], polygons[triangle_row[1]][triangleVertices[index]][2]]
+                            point_on_line_2 = [polygons[triangle_row[1]][triangleVertices[index+1]][1], polygons[triangle_row[1]][triangleVertices[index+1]][2]]
+                            point_1=triangleVertices[index]
+                            point_2=triangleVertices[index+1]
+                            for index in reversed(range(len(triangleVertices))): # find the point that is common for both middle lines
+                                if triangleVertices[index] == point_1 or triangleVertices[index] == point_2:
+                                    triangleVertices.pop(index)
+                            commonPoint = [polygons[triangle_row[1]][triangleVertices[0]][1], polygons[triangle_row[1]][triangleVertices[0]][2]]
+                            points_1=(point_on_line_1, commonPoint)
+                            points_2=(point_on_line_2, commonPoint)
+                            middlePoint_1=getMiddlePoint(points_1)
+                            middlePoint_2=getMiddlePoint(points_2)
+                            middlePoint_1= arcpy.Point(middlePoint_1[0], middlePoint_1[1])
+                            middlePoint_2= arcpy.Point(middlePoint_2[0], middlePoint_2[1])
+                            break
+                    lineVertexArray.add(middlePoint_1)
+                    lineVertexArray.add(middlePoint_2)
+                    polyline = arcpy.Polyline(lineVertexArray)
+                    # insert polyline:
+                    with arcpy.da.InsertCursor(temp_path + "/" + line_shapefile, ["SHAPE@", polygon_nr, UID_field]) as line_cur:
                         polyline = arcpy.Polyline(lineVertexArray)
-                        print "MiddlePoint: " + str(middlePoint)
-                        '''
+                        line_cur.insertRow([polyline, triangle_row[1],triangle_row[2]])
+                if triangle_row[3] == 3:
+                    print "This is a Feature of class 3!!"
+                    print("ID is: "+ str(triangle_row[3]))
+                    # getting the centroid
+                    centroidPoint_1 = [polygons[triangle_row[1]][triangleVertices[0]][1], polygons[triangle_row[1]][triangleVertices[0]][2]]
+                    centroidPoint_2 = [polygons[triangle_row[1]][triangleVertices[1]][1], polygons[triangle_row[1]][triangleVertices[1]][2]]
+                    centroidPoint_3 = [polygons[triangle_row[1]][triangleVertices[2]][1], polygons[triangle_row[1]][triangleVertices[2]][2]]
+                    centroidPoints =(centroidPoint_1, centroidPoint_2, centroidPoint_3)
+                    centroid = getTriangleCentroid(centroidPoints)
+                    centroid = arcpy.Point(centroid[0], centroid[1])
+                    # getting the rest: all the middle points of the triangle sides!
+                    middlePoint_1=getMiddlePoint(([polygons[triangle_row[1]][triangleVertices[0]][1], polygons[triangle_row[1]][triangleVertices[0]][2]], [polygons[triangle_row[1]][triangleVertices[1]][1], polygons[triangle_row[1]][triangleVertices[1]][2]]))
+                    middlePoint_2=getMiddlePoint(([polygons[triangle_row[1]][triangleVertices[1]][1], polygons[triangle_row[1]][triangleVertices[1]][2]], [polygons[triangle_row[1]][triangleVertices[2]][1], polygons[triangle_row[1]][triangleVertices[2]][2]]))
+                    middlePoint_3=getMiddlePoint(([polygons[triangle_row[1]][triangleVertices[0]][1], polygons[triangle_row[1]][triangleVertices[0]][2]], [polygons[triangle_row[1]][triangleVertices[2]][1], polygons[triangle_row[1]][triangleVertices[2]][2]]))
+                    middlePoint_1= arcpy.Point(middlePoint_1[0], middlePoint_1[1])
+                    middlePoint_2= arcpy.Point(middlePoint_2[0], middlePoint_2[1])
+                    middlePoint_3= arcpy.Point(middlePoint_3[0], middlePoint_3[1])
+                    middlePoints=[middlePoint_1, middlePoint_2, middlePoint_3]
+                    for middlePoint in middlePoints:
+                        lineVertexArray.add(middlePoint)
+                        lineVertexArray.add(centroid)
+                        polyline = arcpy.Polyline(lineVertexArray)
                         # insert polyline:
                         with arcpy.da.InsertCursor(temp_path + "/" + line_shapefile, ["SHAPE@", polygon_nr, UID_field]) as line_cur:
                             polyline = arcpy.Polyline(lineVertexArray)
                             line_cur.insertRow([polyline, triangle_row[1],triangle_row[2]])
-
 # MAIN
 arcpy.env.overwriteOutput = True
 workspace = os.path.dirname(os.path.realpath(__file__))
