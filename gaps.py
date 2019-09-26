@@ -119,12 +119,14 @@ def getTriangleCentroid(points):
 def cut_geometry(to_cut, cutter):
     """
     Method copied from: https://gis.stackexchange.com/questions/124198/optimizing-arcpy-code-to-cut-polygon?noredirect=1&lq=1
+    https://github.com/tforward/CutPolygonByLines
     Author: Tristan Forward
     Cut a feature by a line, splitting it into its separate geometries.
     :param to_cut: The feature to cut.
     :param cutter: The polylines to cut the feature by.
     :return: The feature with the split geometry added to it.
     """
+
     arcpy.AddField_management(to_cut, "SOURCE_OID", "LONG")
     geometries = []
     polygon = None
@@ -135,21 +137,33 @@ def cut_geometry(to_cut, cutter):
     insert_cursor = arcpy.da.InsertCursor(to_cut, ["SHAPE@", "SOURCE_OID"])
 
     with arcpy.da.SearchCursor(cutter, "SHAPE@") as lines:
+        id=0
         for line in lines:
             with arcpy.da.UpdateCursor(to_cut, ["SHAPE@", "OID@", "SOURCE_OID"]) as polygons:
                 for polygon in polygons:
                     if line[0].disjoint(polygon[0]) == False:
+                        try:
+                            cutPoly= polygon[0].cut(line[0])
+                            '''
                         if polygon[2] == None:
                             id = polygon[1]
                         # Remove previous geom if additional cuts are needed for intersecting lines
+                        print "Found a line!!"
                         if len(geometries) > 1:
                             del geometries[0] 
                         geometries.append([polygon[0].cut(line[0]), id])
-                        polygons.deleteRow()
+                        '''
+                            polygons.deleteRow()
+                            insert_cursor.insertRow([cutPoly, id])
+                        except:
+                            print "could not cut"
+                            '''
                 for geometryList in geometries:
                     for geometry in geometryList[0]:
                         if geometry.area > 0:
                             insert_cursor.insertRow([geometry, geometryList[1]])
+                            '''
+            id+=1
 
     edit.stopEditing(True)
 
@@ -393,6 +407,8 @@ def createLines(temp_path, line_shapefile, triangle_shapefile, SRS, polygon_nr, 
                     print "This is a Feature of class 3!!"
                     print("ID is: "+ str(triangle_row[3]))
                     # getting the centroid
+                    lineVertexArray1 = arcpy.Array()
+                    lineVertexArray2 = arcpy.Array()
                     centroidPoint_1 = [polygons[triangle_row[1]][triangleVertices[0]][1], polygons[triangle_row[1]][triangleVertices[0]][2]]
                     centroidPoint_2 = [polygons[triangle_row[1]][triangleVertices[1]][1], polygons[triangle_row[1]][triangleVertices[1]][2]]
                     centroidPoint_3 = [polygons[triangle_row[1]][triangleVertices[2]][1], polygons[triangle_row[1]][triangleVertices[2]][2]]
@@ -407,6 +423,21 @@ def createLines(temp_path, line_shapefile, triangle_shapefile, SRS, polygon_nr, 
                     middlePoint_2= arcpy.Point(middlePoint_2[0], middlePoint_2[1])
                     middlePoint_3= arcpy.Point(middlePoint_3[0], middlePoint_3[1])
                     middlePoints=[middlePoint_1, middlePoint_2, middlePoint_3]
+                    # trying to 2 polyline lines that cross polygon entirely instead of 3 lines that meet in the middle
+                    lineVertexArray1.add(middlePoint_1)
+                    lineVertexArray1.add(centroid)
+                    lineVertexArray1.add(middlePoint_2)
+                    lineVertexArray2.add(middlePoint_1)
+                    lineVertexArray2.add(centroid)
+                    lineVertexArray2.add(middlePoint_3)
+                    polyline1 = arcpy.Polyline(lineVertexArray1)
+                    polyline2 = arcpy.Polyline(lineVertexArray2)
+                    # insert polyline:
+                    with arcpy.da.InsertCursor(temp_path + "/" + line_shapefile, ["SHAPE@", polygon_nr, UID_field]) as line_cur:
+
+                        line_cur.insertRow([polyline1, triangle_row[1],triangle_row[2]])
+                        line_cur.insertRow([polyline2, triangle_row[1],triangle_row[2]])
+                    ''' # 
                     for middlePoint in middlePoints:
                         lineVertexArray.add(middlePoint)
                         lineVertexArray.add(centroid)
@@ -415,6 +446,7 @@ def createLines(temp_path, line_shapefile, triangle_shapefile, SRS, polygon_nr, 
                         with arcpy.da.InsertCursor(temp_path + "/" + line_shapefile, ["SHAPE@", polygon_nr, UID_field]) as line_cur:
                             polyline = arcpy.Polyline(lineVertexArray)
                             line_cur.insertRow([polyline, triangle_row[1],triangle_row[2]])
+                    '''
 # MAIN
 arcpy.env.overwriteOutput = True
 workspace = os.path.dirname(os.path.realpath(__file__))
@@ -433,6 +465,7 @@ triangles_path= temp_path+"/"+triangles
 cut_Delaunay="cutDelaunay.shp"
 cutDelaunay_path=temp_path+"/"+cut_Delaunay
 line_shapefile="cutLines.shp"
+line_shapefile_path=temp_path+"/"+line_shapefile
 triangleType="tri_type"
 precision=4
 UID_field="UID"
@@ -462,6 +495,12 @@ eliminateFalseTriangles(cutDelaunay_path, polygons, precision, UID_field)
 determineTriangleType(cutDelaunay_path,polygons , triangleType, precision, polygon_nr, UID_field, point_order, original_order)
 
 createLines(temp_path, line_shapefile, cutDelaunay_path, SRS, polygon_nr, UID_field, triangleType, point_order, original_order, polygons)
+
+arcpy.Dissolve_management(line_shapefile_path, temp_path+"/mergedLines.shp", "", "", "SINGLE_PART", "DISSOLVE_LINES")
+
+arcpy.ExtendLine_edit(line_shapefile_path, 1, "EXTENSION")
+
+cut_geometry(singleparts, line_shapefile_path)
 
 plt.show()
 
