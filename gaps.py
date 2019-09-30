@@ -137,33 +137,20 @@ def cut_geometry(to_cut, cutter):
     insert_cursor = arcpy.da.InsertCursor(to_cut, ["SHAPE@", "SOURCE_OID"])
 
     with arcpy.da.SearchCursor(cutter, "SHAPE@") as lines:
-        id=0
         for line in lines:
-            with arcpy.da.UpdateCursor(to_cut, ["SHAPE@", "OID@", "SOURCE_OID"]) as polygons:
+            with arcpy.da.UpdateCursor(to_cut, ["SHAPE@", "OID@","UID"]) as polygons:
                 for polygon in polygons:
+                    print "Polygon: "+str(polygons[2])
                     if line[0].disjoint(polygon[0]) == False:
+                        print "cutting!!!"
                         try:
-                            cutPoly= polygon[0].cut(line[0])
-                            '''
-                        if polygon[2] == None:
-                            id = polygon[1]
-                        # Remove previous geom if additional cuts are needed for intersecting lines
-                        print "Found a line!!"
-                        if len(geometries) > 1:
-                            del geometries[0] 
-                        geometries.append([polygon[0].cut(line[0]), id])
-                        '''
+                            geometries = polygon[0].cut(line[0])
                             polygons.deleteRow()
-                            insert_cursor.insertRow([cutPoly, id])
                         except:
-                            print "could not cut"
-                            '''
-                for geometryList in geometries:
-                    for geometry in geometryList[0]:
-                        if geometry.area > 0:
-                            insert_cursor.insertRow([geometry, geometryList[1]])
-                            '''
-            id+=1
+                            print "Cutting failed!"    
+                for geometry in geometries:
+                    if geometry.area > 0:
+                        insert_cursor.insertRow([geometry, polygon[1]])
 
     edit.stopEditing(True)
 
@@ -335,6 +322,37 @@ def strToIntList(string):
             print("The string element can not be converted to int!?")
     return myList
 
+def getBearing(points):
+    bearing=0
+    ptn0=points[0]
+    ptn1=points[1]
+
+    if abs(ptn0.X- ptn1.X) < 0.0001:
+        bearing= pi/2.0
+    else:
+        bearing= math.atan2(ptn1.Y-ptn0.Y, ptn1.X-ptn0.X)
+    return bearing
+
+def extendLine(line):
+    lineLength=line.count-1
+    angle1 = getBearing((line[1],line[0]))
+    angle2 = getBearing((line[-2],line[-1]))
+    dX1 = 0.5* math.cos(angle1)
+    dY1 = 0.5* math.sin(angle1)
+    dX2 = 0.5* math.cos(angle2)
+    dY2 = 0.5* math.sin(angle2)
+    print "Line 0: "
+    print line[0]
+    newPoint = arcpy.Point(line[0].X+dX1,line[0].Y+dY1)
+    line.replace(0,arcpy.Point(line[0].X+dX1,line[0].Y+dY1))
+    print line[0]
+    print "Line -1: "
+    print line[lineLength]
+    newPoint = arcpy.Point(line[lineLength].X+dX2,line[lineLength].Y+dY2)
+    line.replace(lineLength,newPoint)
+    print line[lineLength]
+    return line
+
 def createLines(temp_path, line_shapefile, triangle_shapefile, SRS, polygon_nr, UID_field, triangleType, point_order, original_order, polygons):
     arcpy.CreateFeatureclass_management(temp_path, line_shapefile, "POLYLINE","" , "DISABLED", "DISABLED", SRS)
     lines_path=temp_path+"/"+line_shapefile
@@ -409,6 +427,7 @@ def createLines(temp_path, line_shapefile, triangle_shapefile, SRS, polygon_nr, 
                     # getting the centroid
                     lineVertexArray1 = arcpy.Array()
                     lineVertexArray2 = arcpy.Array()
+                    lineVertexArray3 = arcpy.Array()
                     centroidPoint_1 = [polygons[triangle_row[1]][triangleVertices[0]][1], polygons[triangle_row[1]][triangleVertices[0]][2]]
                     centroidPoint_2 = [polygons[triangle_row[1]][triangleVertices[1]][1], polygons[triangle_row[1]][triangleVertices[1]][2]]
                     centroidPoint_3 = [polygons[triangle_row[1]][triangleVertices[2]][1], polygons[triangle_row[1]][triangleVertices[2]][2]]
@@ -423,20 +442,33 @@ def createLines(temp_path, line_shapefile, triangle_shapefile, SRS, polygon_nr, 
                     middlePoint_2= arcpy.Point(middlePoint_2[0], middlePoint_2[1])
                     middlePoint_3= arcpy.Point(middlePoint_3[0], middlePoint_3[1])
                     middlePoints=[middlePoint_1, middlePoint_2, middlePoint_3]
+                    vertice1=[polygons[triangle_row[1]][triangleVertices[2]][1], polygons[triangle_row[1]][triangleVertices[2]][2]]
+                    vertice2=[polygons[triangle_row[1]][triangleVertices[0]][1], polygons[triangle_row[1]][triangleVertices[0]][2]]
+                    vertice3=[polygons[triangle_row[1]][triangleVertices[1]][1], polygons[triangle_row[1]][triangleVertices[1]][2]]
+                    vertice1=arcpy.Point(vertice1[0], vertice1[1])
+                    vertice2=arcpy.Point(vertice2[0], vertice2[1])
+                    vertice3=arcpy.Point(vertice3[0], vertice3[1])
                     # trying to 2 polyline lines that cross polygon entirely instead of 3 lines that meet in the middle
+                    # Another try: 3 Polylines, crossing in the middle, from middle of lines to vertices
                     lineVertexArray1.add(middlePoint_1)
-                    lineVertexArray1.add(centroid)
-                    lineVertexArray1.add(middlePoint_2)
-                    lineVertexArray2.add(middlePoint_1)
-                    lineVertexArray2.add(centroid)
-                    lineVertexArray2.add(middlePoint_3)
+                    lineVertexArray1.add(vertice1)
+                    lineVertexArray2.add(vertice2)
+                    lineVertexArray2.add(middlePoint_2)
+                    lineVertexArray3.add(vertice3)
+                    lineVertexArray3.add(middlePoint_3)
+                    lineVertexArray1=extendLine(lineVertexArray1)
+                    lineVertexArray2=extendLine(lineVertexArray2)
+                    lineVertexArray3=extendLine(lineVertexArray3)
                     polyline1 = arcpy.Polyline(lineVertexArray1)
                     polyline2 = arcpy.Polyline(lineVertexArray2)
+                    polyline3 = arcpy.Polyline(lineVertexArray3)
                     # insert polyline:
+                    '''
                     with arcpy.da.InsertCursor(temp_path + "/" + line_shapefile, ["SHAPE@", polygon_nr, UID_field]) as line_cur:
 
                         line_cur.insertRow([polyline1, triangle_row[1],triangle_row[2]])
                         line_cur.insertRow([polyline2, triangle_row[1],triangle_row[2]])
+                        line_cur.insertRow([polyline3, triangle_row[1],triangle_row[2]])
                     ''' # 
                     for middlePoint in middlePoints:
                         lineVertexArray.add(middlePoint)
@@ -446,7 +478,7 @@ def createLines(temp_path, line_shapefile, triangle_shapefile, SRS, polygon_nr, 
                         with arcpy.da.InsertCursor(temp_path + "/" + line_shapefile, ["SHAPE@", polygon_nr, UID_field]) as line_cur:
                             polyline = arcpy.Polyline(lineVertexArray)
                             line_cur.insertRow([polyline, triangle_row[1],triangle_row[2]])
-                    '''
+                    
 # MAIN
 arcpy.env.overwriteOutput = True
 workspace = os.path.dirname(os.path.realpath(__file__))
@@ -472,6 +504,7 @@ UID_field="UID"
 polygon_nr="PolyNo"
 point_order="Pnt_order"
 original_order= "Orig_order"
+pi=math.pi
 
 # Find gaps in polygon layer: 1) union 2) fill Gaps 3) Difference 4) To Singleparts
 arcpy.Dissolve_management (input_shapefile, dissolved)
@@ -496,15 +529,12 @@ determineTriangleType(cutDelaunay_path,polygons , triangleType, precision, polyg
 
 createLines(temp_path, line_shapefile, cutDelaunay_path, SRS, polygon_nr, UID_field, triangleType, point_order, original_order, polygons)
 
-arcpy.Dissolve_management(line_shapefile_path, temp_path+"/mergedLines.shp", "", "", "SINGLE_PART", "DISSOLVE_LINES")
+arcpy.Dissolve_management(line_shapefile_path, output_path+"/mergedLines.shp", "", "", "SINGLE_PART", "UNSPLIT_LINES")
 
-arcpy.ExtendLine_edit(line_shapefile_path, 1, "EXTENSION")
-
-cut_geometry(singleparts, line_shapefile_path)
+# Cut each Delaunay Polygon with the polygon centerlines
+cut_geometry(cutDelaunay_path, output_path+"/mergedLines.shp")
 
 plt.show()
 
-# Cut each Delaunay Polygon with the polygon centerlines
-# cut_geometry(cutDelaunay_path, polygonCenterlines)
-
+#delete temp directory
 #shutil.rmtree(temp_path)
