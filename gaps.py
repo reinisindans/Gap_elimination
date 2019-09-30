@@ -94,7 +94,6 @@ def findPointId(pointXY, polygon, precision):
     return pointID
 
 def getMiddlePoint(points):
-    print ("Points: "+ str(points)) 
     point1_X= points[0][0]
     point1_Y= points[0][1]
     point2_X= points[1][0]
@@ -138,19 +137,23 @@ def cut_geometry(to_cut, cutter):
 
     with arcpy.da.SearchCursor(cutter, "SHAPE@") as lines:
         for line in lines:
-            with arcpy.da.UpdateCursor(to_cut, ["SHAPE@", "OID@","UID"]) as polygons:
+            with arcpy.da.UpdateCursor(to_cut, ["SHAPE@", "OID@", "SOURCE_OID"]) as polygons:
                 for polygon in polygons:
-                    print "Polygon: "+str(polygons[2])
                     if line[0].disjoint(polygon[0]) == False:
-                        print "cutting!!!"
+                        if polygon[2] == None:
+                            polygon[2] = polygon[1]
+                        # Remove previous geom if additional cuts are needed for intersecting lines
+                        if len(geometries) > 1:
+                            del geometries[0]
                         try:
-                            geometries = polygon[0].cut(line[0])
+                            geometries.append([polygon[0].cut(line[0]), polygon[2]])
                             polygons.deleteRow()
                         except:
-                            print "Cutting failed!"    
-                for geometry in geometries:
-                    if geometry.area > 0:
-                        insert_cursor.insertRow([geometry, polygon[1]])
+                            print "Error while cutting polygon No. "+ str(polygon[1])
+                for geometryList in geometries:
+                    for geometry in geometryList[0]:
+                        if geometry.area > 0:
+                            insert_cursor.insertRow([geometry, geometryList[1]])
 
     edit.stopEditing(True)
 
@@ -187,9 +190,7 @@ def createDelaunay(temp_path,triangles, polygons, SRS, polygon_nr, UID_field, po
                 polygon= arcpy.Polygon(array, SRS)
                 cursor.insertRow([uid, numpyPolygon[0,0], polygon])
                 uid+=1
-                
             # Plotting just for visualization
-            
             plt.triplot(numpyPolygon[:,1], numpyPolygon[:,2], delaunayTriangulation.simplices)
             plt.plot(numpyPolygon[:-1,1], numpyPolygon[:-1,2], 'o')
             for i in range(len(numpyPolygon)-1):
@@ -322,50 +323,17 @@ def strToIntList(string):
             print("The string element can not be converted to int!?")
     return myList
 
-def getBearing(points):
-    bearing=0
-    ptn0=points[0]
-    ptn1=points[1]
-
-    if abs(ptn0.X- ptn1.X) < 0.0001:
-        bearing= pi/2.0
-    else:
-        bearing= math.atan2(ptn1.Y-ptn0.Y, ptn1.X-ptn0.X)
-    return bearing
-
-def extendLine(line):
-    lineLength=line.count-1
-    angle1 = getBearing((line[1],line[0]))
-    angle2 = getBearing((line[-2],line[-1]))
-    dX1 = 0.5* math.cos(angle1)
-    dY1 = 0.5* math.sin(angle1)
-    dX2 = 0.5* math.cos(angle2)
-    dY2 = 0.5* math.sin(angle2)
-    print "Line 0: "
-    print line[0]
-    newPoint = arcpy.Point(line[0].X+dX1,line[0].Y+dY1)
-    line.replace(0,arcpy.Point(line[0].X+dX1,line[0].Y+dY1))
-    print line[0]
-    print "Line -1: "
-    print line[lineLength]
-    newPoint = arcpy.Point(line[lineLength].X+dX2,line[lineLength].Y+dY2)
-    line.replace(lineLength,newPoint)
-    print line[lineLength]
-    return line
-
-def createLines(temp_path, line_shapefile, triangle_shapefile, SRS, polygon_nr, UID_field, triangleType, point_order, original_order, polygons):
+def createLines(temp_path, line_shapefile, triangle_shapefile, SRS, polygon_nr, UID_field, triangleType, point_order, polygons):
     arcpy.CreateFeatureclass_management(temp_path, line_shapefile, "POLYLINE","" , "DISABLED", "DISABLED", SRS)
     lines_path=temp_path+"/"+line_shapefile
     arcpy.AddField_management(in_table=lines_path, field_name=polygon_nr, field_type='LONG', field_length=10)
     arcpy.AddField_management(in_table=lines_path, field_name=UID_field, field_type='LONG', field_length=10)
 
-    with arcpy.da.SearchCursor(triangle_shapefile, ["SHAPE@", polygon_nr, UID_field, triangleType, point_order, original_order]) as triangle_cur:
+    with arcpy.da.SearchCursor(triangle_shapefile, ["SHAPE@", polygon_nr, UID_field, triangleType, point_order]) as triangle_cur:
         for triangle_row in triangle_cur:
             if triangle_row[3] > 0:
                 lineVertexArray = arcpy.Array()
                 triangleVertices = strToIntList(triangle_row[4])
-                print str(triangleVertices)
-                originalVertices = strToIntList(triangle_row[5])
                 point_1=0
                 point_2=0
                 if triangle_row[3] == 1: # Get the points that are following one another. The "jump" in point indexing is the vertice where the middle has to be determined
@@ -422,8 +390,6 @@ def createLines(temp_path, line_shapefile, triangle_shapefile, SRS, polygon_nr, 
                         polyline = arcpy.Polyline(lineVertexArray)
                         line_cur.insertRow([polyline, triangle_row[1],triangle_row[2]])
                 if triangle_row[3] == 3:
-                    print "This is a Feature of class 3!!"
-                    print("ID is: "+ str(triangle_row[3]))
                     # getting the centroid
                     lineVertexArray1 = arcpy.Array()
                     lineVertexArray2 = arcpy.Array()
@@ -442,34 +408,8 @@ def createLines(temp_path, line_shapefile, triangle_shapefile, SRS, polygon_nr, 
                     middlePoint_2= arcpy.Point(middlePoint_2[0], middlePoint_2[1])
                     middlePoint_3= arcpy.Point(middlePoint_3[0], middlePoint_3[1])
                     middlePoints=[middlePoint_1, middlePoint_2, middlePoint_3]
-                    vertice1=[polygons[triangle_row[1]][triangleVertices[2]][1], polygons[triangle_row[1]][triangleVertices[2]][2]]
-                    vertice2=[polygons[triangle_row[1]][triangleVertices[0]][1], polygons[triangle_row[1]][triangleVertices[0]][2]]
-                    vertice3=[polygons[triangle_row[1]][triangleVertices[1]][1], polygons[triangle_row[1]][triangleVertices[1]][2]]
-                    vertice1=arcpy.Point(vertice1[0], vertice1[1])
-                    vertice2=arcpy.Point(vertice2[0], vertice2[1])
-                    vertice3=arcpy.Point(vertice3[0], vertice3[1])
-                    # trying to 2 polyline lines that cross polygon entirely instead of 3 lines that meet in the middle
-                    # Another try: 3 Polylines, crossing in the middle, from middle of lines to vertices
-                    lineVertexArray1.add(middlePoint_1)
-                    lineVertexArray1.add(vertice1)
-                    lineVertexArray2.add(vertice2)
-                    lineVertexArray2.add(middlePoint_2)
-                    lineVertexArray3.add(vertice3)
-                    lineVertexArray3.add(middlePoint_3)
-                    lineVertexArray1=extendLine(lineVertexArray1)
-                    lineVertexArray2=extendLine(lineVertexArray2)
-                    lineVertexArray3=extendLine(lineVertexArray3)
-                    polyline1 = arcpy.Polyline(lineVertexArray1)
-                    polyline2 = arcpy.Polyline(lineVertexArray2)
-                    polyline3 = arcpy.Polyline(lineVertexArray3)
-                    # insert polyline:
-                    '''
-                    with arcpy.da.InsertCursor(temp_path + "/" + line_shapefile, ["SHAPE@", polygon_nr, UID_field]) as line_cur:
 
-                        line_cur.insertRow([polyline1, triangle_row[1],triangle_row[2]])
-                        line_cur.insertRow([polyline2, triangle_row[1],triangle_row[2]])
-                        line_cur.insertRow([polyline3, triangle_row[1],triangle_row[2]])
-                    ''' # 
+                    # insert polyline:
                     for middlePoint in middlePoints:
                         lineVertexArray.add(middlePoint)
                         lineVertexArray.add(centroid)
@@ -495,7 +435,7 @@ singleparts=temp_path+"/singleparts.shp"
 triangles="triangles.shp"
 triangles_path= temp_path+"/"+triangles
 cut_Delaunay="cutDelaunay.shp"
-cutDelaunay_path=temp_path+"/"+cut_Delaunay
+cutDelaunay_path=output_path+"/"+cut_Delaunay
 line_shapefile="cutLines.shp"
 line_shapefile_path=temp_path+"/"+line_shapefile
 triangleType="tri_type"
@@ -512,9 +452,6 @@ getHoles(dissolved)
 arcpy.Erase_analysis(dissolved, input_shapefile, holes)
 arcpy.MultipartToSinglepart_management (holes, singleparts)
 
-#Create delaunay Triangulation, get middle of Delaunay lines 1) get middle of
-# Delaunay lines 2) create triangle-Polygons using the Vertices of Polygon and
-# Delaunay line middle points
 polygons=extractPolygons(singleparts)
 
 # creating the triangle shapefile
@@ -527,14 +464,16 @@ eliminateFalseTriangles(cutDelaunay_path, polygons, precision, UID_field)
 
 determineTriangleType(cutDelaunay_path,polygons , triangleType, precision, polygon_nr, UID_field, point_order, original_order)
 
-createLines(temp_path, line_shapefile, cutDelaunay_path, SRS, polygon_nr, UID_field, triangleType, point_order, original_order, polygons)
+createLines(temp_path, line_shapefile, cutDelaunay_path, SRS, polygon_nr, UID_field, triangleType, point_order, polygons)
 
 arcpy.Dissolve_management(line_shapefile_path, output_path+"/mergedLines.shp", "", "", "SINGLE_PART", "UNSPLIT_LINES")
 
 # Cut each Delaunay Polygon with the polygon centerlines
 cut_geometry(cutDelaunay_path, output_path+"/mergedLines.shp")
 
+#delete temp directory
+shutil.rmtree(temp_path)
+
 plt.show()
 
-#delete temp directory
-#shutil.rmtree(temp_path)
+
