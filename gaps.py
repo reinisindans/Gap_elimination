@@ -115,47 +115,6 @@ def getTriangleCentroid(points):
     centroid=[centroid_X, centroid_Y]
     return centroid
 
-def cut_geometry(to_cut, cutter):
-    """
-    Method copied from: https://gis.stackexchange.com/questions/124198/optimizing-arcpy-code-to-cut-polygon?noredirect=1&lq=1
-    https://github.com/tforward/CutPolygonByLines
-    Author: Tristan Forward
-    Cut a feature by a line, splitting it into its separate geometries.
-    :param to_cut: The feature to cut.
-    :param cutter: The polylines to cut the feature by.
-    :return: The feature with the split geometry added to it.
-    """
-
-    arcpy.AddField_management(to_cut, "SOURCE_OID", "LONG")
-    geometries = []
-    polygon = None
-
-    edit = arcpy.da.Editor(os.path.dirname(to_cut))
-    edit.startEditing(False, False)
-
-    insert_cursor = arcpy.da.InsertCursor(to_cut, ["SHAPE@", "SOURCE_OID"])
-
-    with arcpy.da.SearchCursor(cutter, "SHAPE@") as lines:
-        for line in lines:
-            with arcpy.da.UpdateCursor(to_cut, ["SHAPE@", "OID@", "SOURCE_OID"]) as polygons:
-                for polygon in polygons:
-                    if line[0].disjoint(polygon[0]) == False:
-                        if polygon[2] == None:
-                            polygon[2] = polygon[1]
-                        # Remove previous geom if additional cuts are needed for intersecting lines
-                        if len(geometries) > 1:
-                            del geometries[0]
-                        try:
-                            geometries.append([polygon[0].cut(line[0]), polygon[2]])
-                            polygons.deleteRow()
-                        except:
-                            print "Error while cutting polygon No. "+ str(polygon[1])
-                for geometryList in geometries:
-                    for geometry in geometryList[0]:
-                        if geometry.area > 0:
-                            insert_cursor.insertRow([geometry, geometryList[1]])
-
-    edit.stopEditing(True)
 
 def createDelaunay(temp_path,triangles, polygons, SRS, polygon_nr, UID_field, point_order , original_order):
     # Creating the new Delaunay .shp
@@ -328,6 +287,21 @@ def polyToLine(polygonPath, outPath):
     #arcpy.CreateFeatureclass_management(tempPath, lineShpName, "POLYLINE","" , "DISABLED", "DISABLED", SRS)
     arcpy.PolygonToLine_management (polygonPath, outPath)
 
+def addTypeField(shapePath, fieldName, fieldValue):
+    arcpy.AddField_management(shapePath, fieldName, 'TEXT', 10)
+    with arcpy.da.UpdateCursor(shapePath, [fieldName]) as cur:
+        for row in cur:
+            row[0]=fieldValue
+            cur.updateRow(row)
+
+def getNeighbors(shpPath, fieldName, fieldValue, tablePath):
+    #arcpy.MakeFeatureLayer_management(shpPath,r"Selection")
+    #arcpy.SelectLayerByAttribute_management(r"Selection", "NEW_SELECTION", "\""+fieldName+"\" = '"+ fieldValue+"'")
+    #print("Selected feature count: " + str(arcpy.GetCount_management(r"Selection")))
+    arcpy.PolygonNeighbors_analysis(shpPath, tablePath)
+    
+    print(arcpy.GetMessages())
+    
 def createLines(temp_path, line_shapefile, triangle_shapefile, SRS, polygon_nr, UID_field, triangleType, point_order, polygons):
     arcpy.CreateFeatureclass_management(temp_path, line_shapefile, "POLYLINE","" , "DISABLED", "DISABLED", SRS)
     lines_path=temp_path+"/"+line_shapefile
@@ -448,6 +422,9 @@ line_shapefile_path=temp_path+"/"+line_shapefile
 linesFromPolygon_path= temp_path+"/"+linesFromPoly
 mergedLines_path= temp_path+"/mergedLines.shp"
 dissolvedMergedLines_path= temp_path+"/dissolvedMergedLines.shp"
+originalWithDelaunay=temp_path+"/originalWithDelaunay.shp"
+neighborTablePath=temp_path+"/neighborTable.dbf"
+typeField="Type"
 
 triangleType="tri_type"
 precision=4
@@ -475,14 +452,22 @@ eliminateFalseTriangles(cutDelaunay_path, polygons, precision, UID_field)
 # Draw the polygon skeletoid
 determineTriangleType(cutDelaunay_path,polygons , triangleType, precision, polygon_nr, UID_field, point_order, original_order)
 createLines(temp_path, line_shapefile, cutDelaunay_path, SRS, polygon_nr, UID_field, triangleType, point_order, polygons)
+
 # transform the delaunay triangles to lines and merge with skeletoids, then transform back to polygons
 polyToLine(cutDelaunay_path, linesFromPolygon_path)
 arcpy.Merge_management([line_shapefile_path, linesFromPolygon_path],mergedLines_path)
 arcpy.Dissolve_management(mergedLines_path, dissolvedMergedLines_path,"","","","UNSPLIT_LINES")
 arcpy.FeatureToPolygon_management(mergedLines_path, cutDelaunay_path)
 
-# Cut each Delaunay Polygon with the polygon centerlines
-#cut_geometry(cutDelaunay_path, output_path+"/mergedLines.shp")
+# Identify featureClasses
+addTypeField(cutDelaunay_path, typeField, "Delaunay")
+addTypeField(input_shapefile, typeField, "Original")
+
+# Merge original FeatureClass with prepared delaunay polygons
+arcpy.Merge_management([cutDelaunay_path, input_shapefile], originalWithDelaunay)
+
+getNeighbors(originalWithDelaunay, typeField, "Delaunay", neighborTablePath)
+
 
 #delete temp directory
 #shutil.rmtree(temp_path)
