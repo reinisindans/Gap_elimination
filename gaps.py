@@ -323,6 +323,11 @@ def strToIntList(string):
             print("The string element can not be converted to int!?")
     return myList
 
+def polyToLine(polygonPath, outPath):
+    #outPath=tempPath+"/"+lineShpName
+    #arcpy.CreateFeatureclass_management(tempPath, lineShpName, "POLYLINE","" , "DISABLED", "DISABLED", SRS)
+    arcpy.PolygonToLine_management (polygonPath, outPath)
+
 def createLines(temp_path, line_shapefile, triangle_shapefile, SRS, polygon_nr, UID_field, triangleType, point_order, polygons):
     arcpy.CreateFeatureclass_management(temp_path, line_shapefile, "POLYLINE","" , "DISABLED", "DISABLED", SRS)
     lines_path=temp_path+"/"+line_shapefile
@@ -435,9 +440,15 @@ singleparts=temp_path+"/singleparts.shp"
 triangles="triangles.shp"
 triangles_path= temp_path+"/"+triangles
 cut_Delaunay="cutDelaunay.shp"
-cutDelaunay_path=output_path+"/"+cut_Delaunay
+cutDelaunay_path=temp_path+"/"+cut_Delaunay
+delaunayWithSkeletoid_path= temp_path+"/delaunayWithSkeletoid.shp"
 line_shapefile="cutLines.shp"
+linesFromPoly="linesFromPoly.shp"
 line_shapefile_path=temp_path+"/"+line_shapefile
+linesFromPolygon_path= temp_path+"/"+linesFromPoly
+mergedLines_path= temp_path+"/mergedLines.shp"
+dissolvedMergedLines_path= temp_path+"/dissolvedMergedLines.shp"
+
 triangleType="tri_type"
 precision=4
 UID_field="UID"
@@ -459,20 +470,22 @@ createDelaunay(temp_path,triangles, polygons, SRS, polygon_nr, UID_field, point_
 
 #cut delauney with original holes to remove extras
 arcpy.Clip_analysis(triangles_path, holes, cutDelaunay_path)
-
 eliminateFalseTriangles(cutDelaunay_path, polygons, precision, UID_field)
 
+# Draw the polygon skeletoid
 determineTriangleType(cutDelaunay_path,polygons , triangleType, precision, polygon_nr, UID_field, point_order, original_order)
-
 createLines(temp_path, line_shapefile, cutDelaunay_path, SRS, polygon_nr, UID_field, triangleType, point_order, polygons)
-
-arcpy.Dissolve_management(line_shapefile_path, output_path+"/mergedLines.shp", "", "", "SINGLE_PART", "UNSPLIT_LINES")
+# transform the delaunay triangles to lines and merge with skeletoids, then transform back to polygons
+polyToLine(cutDelaunay_path, linesFromPolygon_path)
+arcpy.Merge_management([line_shapefile_path, linesFromPolygon_path],mergedLines_path)
+arcpy.Dissolve_management(mergedLines_path, dissolvedMergedLines_path,"","","","UNSPLIT_LINES")
+arcpy.FeatureToPolygon_management(mergedLines_path, cutDelaunay_path)
 
 # Cut each Delaunay Polygon with the polygon centerlines
-cut_geometry(cutDelaunay_path, output_path+"/mergedLines.shp")
+#cut_geometry(cutDelaunay_path, output_path+"/mergedLines.shp")
 
 #delete temp directory
-shutil.rmtree(temp_path)
+#shutil.rmtree(temp_path)
 
 plt.show()
 
