@@ -30,6 +30,7 @@ def searchSHP(workspace):
         print("Something is wrong with the shapefile! Are You sure exactly one shapefile exists in the directory with the python script?")
 
 def getHoles(input_fc):
+    # Getting the holes
     with arcpy.da.UpdateCursor(input_fc, "SHAPE@") as cur:
         for polygon, in cur:
             if polygon is None: continue
@@ -44,6 +45,7 @@ def getHoles(input_fc):
             cur.updateRow([polygon])
 
 def extractPolygons(singleparts):
+    # getting hole polygons as a List of Coordinates
     polygons=[]
     with arcpy.da.SearchCursor(singleparts,['OID@','SHAPE@']) as cursor:
         for row in cursor:
@@ -130,13 +132,9 @@ def createDelaunay(temp_path,triangles, polygons, SRS, polygon_nr, UID_field, po
     uid=0
     for polygon in polygons:
         numpyPolygon=np.array(polygon)
-        #print numpyPolygon
         delaunayTriangulation=Delaunay(numpyPolygon[:,1:], qhull_options='QbB Qx Qs Qz Qt Q12')
-
-        #print ("Delaunay simplices: ", delaunayTriangulation.simplices)
-        #print delaunayTriangulation.simplices
-        #add to Triangulation shapefile!
         
+        #add to Triangulation shapefile!
         plt.figure(2)
         
         with arcpy.da.InsertCursor(output_fc,[UID_field,polygon_nr,'SHAPE@']) as cursor:
@@ -156,6 +154,7 @@ def createDelaunay(temp_path,triangles, polygons, SRS, polygon_nr, UID_field, po
                 plt.text(numpyPolygon[i][1], numpyPolygon[i][2], i, va="top", family="monospace")
 
 def mergeFeatures(problem_points, featureClass, UID_field):
+    # merge the extra redundant polygons that have been created when executing Delaunay
     for problem_point in problem_points.keys():
         rows_to_merge=[]
         fields= arcpy.ListFields(featureClass)
@@ -274,6 +273,7 @@ def determineTriangleType(cutDelaunay_path, polygons, triangleType, precision, p
             cursor.updateRow(row)
 
 def strToIntList(string):
+    # Translate string to a list of ints
     myList=[]
     for element in string:
         try:
@@ -283,8 +283,7 @@ def strToIntList(string):
     return myList
 
 def polyToLine(polygonPath, outPath):
-    #outPath=tempPath+"/"+lineShpName
-    #arcpy.CreateFeatureclass_management(tempPath, lineShpName, "POLYLINE","" , "DISABLED", "DISABLED", SRS)
+    # redundant function
     arcpy.PolygonToLine_management (polygonPath, outPath)
 
 def addTypeField(shapePath, fieldName, fieldValue):
@@ -294,13 +293,108 @@ def addTypeField(shapePath, fieldName, fieldValue):
             row[0]=fieldValue
             cur.updateRow(row)
 
-def getNeighbors(shpPath, fieldName, fieldValue, tablePath):
-    #arcpy.MakeFeatureLayer_management(shpPath,r"Selection")
-    #arcpy.SelectLayerByAttribute_management(r"Selection", "NEW_SELECTION", "\""+fieldName+"\" = '"+ fieldValue+"'")
-    #print("Selected feature count: " + str(arcpy.GetCount_management(r"Selection")))
-    arcpy.PolygonNeighbors_analysis(shpPath, tablePath)
-    
-    print(arcpy.GetMessages())
+def getNeighbors(shpPath, tablePath):
+    # find all neighbors, as neighbor table
+    with arcpy.da.UpdateCursor(shpPath, ["OID@","Id"]) as cur:
+        for row in cur:
+            row[1]=row[0]
+            cur.updateRow(row)
+    arcpy.PolygonNeighbors_analysis(shpPath, tablePath,"Id", "NO_AREA_OVERLAP", "BOTH_SIDES", 0.001)
+    print(arcpy.GetMessages())  
+
+def determineMergeNeighbors(neighborSet):
+    # from each 'hole'- polygon find the corresponding Original polyton to merge with
+    for key in neighborSet:
+        numpyArray = np.array(neighborSet[key])
+        print ("numpyArray: " +str(key)+ "\n"+ str(numpyArray))
+        if np.max(numpyArray[:,1]) == 0:
+            print ("No common edges!")
+            maxNodes= np.max(numpyArray[:,2])
+            neighbor=numpyArray[np.where(numpyArray[:,2] == maxNodes)][0][0]
+            neighborSet[key]=neighbor
+        else:
+            maxEdge= np.max(numpyArray[:,1])
+            neighbor=numpyArray[np.where(numpyArray[:,1] == maxEdge)][0][0]
+            print ("Max Edge: "+ str(maxEdge)+ "  Neighbor is: "+  str(neighbor))
+            neighborSet[key]=neighbor
+    return neighborSet
+
+def restructureMergeSets(neighborSet):
+    # restructure the neighbor sets so that the original Polygons are used as keys (switch values and keys)
+    newSet={}
+    for key in neighborSet:
+        if neighborSet[key] not in newSet:
+            newSet[neighborSet[key]]=[key]
+        else:
+            newSet[neighborSet[key]].append(key)
+    print ("New set looks like this: "+ str(newSet))
+    return newSet
+
+def mergeNeighbors(mergeDict, shapefile):
+    # merge the neighbors
+    mergeDict= restructureMergeSets(mergeDict)
+    newGeometriesList=[]
+    print ("New Set: \n"+ str(mergeDict))
+    for key in mergeDict:
+        mergeList=mergeDict[key]
+        mergeList.append(int(key))
+        mergeList.sort(reverse=True)
+        print ("My mergeList: "+ str(mergeList))
+        geometries=[]
+        try:
+            for polygonId in mergeList:
+                expression = u'{0} = {1}'.format(arcpy.AddFieldDelimiters(shapefile, "Id"), polygonId)
+                print ("Expression: "+ expression)
+                with arcpy.da.SearchCursor(shapefile, ["SHAPE@","Id"], where_clause=expression) as cur:
+                    for row in cur:
+                        geometries.append(row[0])
+            print("Geometries length: "+ str(len(geometries)))
+            print("mergeList length: "+ str(len(mergeList)))
+        except:
+            print ("Problem getting geometries!")
+        
+        while len(geometries)>1:
+            newGeometry=geometries[-1].union(geometries[-2])
+            geometries.insert(0, newGeometry)
+            print (str(len(geometries)))
+            del geometries[-2:]
+            print (str(len(geometries)))
+        for polygonId in mergeList:
+            expression = u'{0} = {1}'.format(arcpy.AddFieldDelimiters(shapefile, "Id"), polygonId)
+            print ("Expression: "+ expression)
+            with arcpy.da.UpdateCursor(shapefile, ["SHAPE@","Id"], where_clause=expression) as cur:
+                for row in cur:
+                    print ("Deleting row: "+ str(row[1]))
+                    cur.deleteRow()
+        newGeometriesList.append(geometries[0])
+        print ("geometries length: "+ str(len(geometries)))
+        cur = arcpy.da.InsertCursor(shapefile,["SHAPE@", "Type", "Id"])
+        cur.insertRow([geometries[0],"Modified", -1])
+        print ("Row inserted")
+        
+
+def getMergeNeighbors(shapefile, neighborTable):
+    # find the neighbors
+    print ("Getting neighbors: ")
+    neighborSets={}
+    shapefileFields=["Id", "Type"]
+    tableFields=["src_Id","nbr_Id","LENGTH", "NODE_COUNT"]
+    with arcpy.da.SearchCursor(neighborTable, tableFields) as table_cur:
+        for table_row in table_cur:
+            expression = u'{0} = {1}'.format(arcpy.AddFieldDelimiters(shapefile, shapefileFields[0]), table_row[0])
+            with arcpy.da.SearchCursor(shapefile, shapefileFields, where_clause=expression) as srcShp_cur:
+                for src_row in srcShp_cur:
+                    if src_row[1] == "Delaunay":
+                        expression = u'{0} = {1}'.format(arcpy.AddFieldDelimiters(shapefile, shapefileFields[0]), table_row[1])
+                        with arcpy.da.SearchCursor(shapefile, shapefileFields, where_clause=expression) as nbrShp_cur:
+                            for nbr_row in nbrShp_cur:
+                                if nbr_row[1]=="Original":
+                                    if table_row[0] not in neighborSets:
+                                        neighborSets[table_row[0]]=[]
+                                    neighborSets[table_row[0]].append(table_row[1:])
+    neighborSet= determineMergeNeighbors(neighborSets)
+    print ("Neighbor Sets: \n"+ str(neighborSets))
+    return neighborSets
     
 def createLines(temp_path, line_shapefile, triangle_shapefile, SRS, polygon_nr, UID_field, triangleType, point_order, polygons):
     arcpy.CreateFeatureclass_management(temp_path, line_shapefile, "POLYLINE","" , "DISABLED", "DISABLED", SRS)
@@ -399,6 +493,8 @@ def createLines(temp_path, line_shapefile, triangle_shapefile, SRS, polygon_nr, 
                             line_cur.insertRow([polyline, triangle_row[1],triangle_row[2]])
                     
 # MAIN
+
+# Variables
 arcpy.env.overwriteOutput = True
 workspace = os.path.dirname(os.path.realpath(__file__))
 temp_folder= "Temp"
@@ -422,10 +518,9 @@ line_shapefile_path=temp_path+"/"+line_shapefile
 linesFromPolygon_path= temp_path+"/"+linesFromPoly
 mergedLines_path= temp_path+"/mergedLines.shp"
 dissolvedMergedLines_path= temp_path+"/dissolvedMergedLines.shp"
-originalWithDelaunay=temp_path+"/originalWithDelaunay.shp"
+originalWithDelaunay=output_path+"/result.shp"
 neighborTablePath=temp_path+"/neighborTable.dbf"
 typeField="Type"
-
 triangleType="tri_type"
 precision=4
 UID_field="UID"
@@ -433,6 +528,8 @@ polygon_nr="PolyNo"
 point_order="Pnt_order"
 original_order= "Orig_order"
 pi=math.pi
+
+# CODE
 
 # Find gaps in polygon layer: 1) union 2) fill Gaps 3) Difference 4) To Singleparts
 arcpy.Dissolve_management (input_shapefile, dissolved)
@@ -466,11 +563,14 @@ addTypeField(input_shapefile, typeField, "Original")
 # Merge original FeatureClass with prepared delaunay polygons
 arcpy.Merge_management([cutDelaunay_path, input_shapefile], originalWithDelaunay)
 
-getNeighbors(originalWithDelaunay, typeField, "Delaunay", neighborTablePath)
-
+# Determine the neighbors of original polygons
+getNeighbors(originalWithDelaunay, neighborTablePath)
+neighborSets=getMergeNeighbors(originalWithDelaunay, neighborTablePath)
+#Merge Neighbors
+mergeNeighbors(neighborSets, originalWithDelaunay)
 
 #delete temp directory
-#shutil.rmtree(temp_path)
+shutil.rmtree(temp_path)
 
 plt.show()
 
