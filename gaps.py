@@ -532,12 +532,13 @@ pi=math.pi
 # CODE
 
 # Find gaps in polygon layer: 1) union 2) fill Gaps 3) Difference 4) To Singleparts
-arcpy.Dissolve_management (input_shapefile, dissolved)
+arcpy.Dissolve_management(input_shapefile, dissolved)
 getHoles(dissolved)
 arcpy.Erase_analysis(dissolved, input_shapefile, holes)
 arcpy.MultipartToSinglepart_management (holes, singleparts)
 
 polygons=extractPolygons(singleparts)
+print ("Polygon length: "+ str(len(polygons)))
 
 # creating the triangle shapefile
 createDelaunay(temp_path,triangles, polygons, SRS, polygon_nr, UID_field, point_order , original_order)
@@ -570,7 +571,7 @@ neighborSets=getMergeNeighbors(originalWithDelaunay, neighborTablePath)
 mergeNeighbors(neighborSets, originalWithDelaunay)
 
 #delete temp directory
-shutil.rmtree(temp_path)
+#shutil.rmtree(temp_path)
 
 plt.show()
 
