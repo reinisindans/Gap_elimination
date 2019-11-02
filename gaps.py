@@ -549,7 +549,7 @@ neighborSets=getMergeNeighbors(originalWithDelaunay, neighborTablePath)
 mergeNeighbors(neighborSets, originalWithDelaunay)
 
 # delete temp directory
-#shutil.rmtree(temp_path)
+shutil.rmtree(temp_path)
 
 # Visualises the gap delaunay mesh
 #plt.show()
